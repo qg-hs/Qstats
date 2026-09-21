@@ -1,0 +1,97 @@
+name: Build macOS apps
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            label: Apple Silicon
+            runner: macos-14
+            chip: apple-silicon
+          - arch: x86_64
+            label: Intel
+            runner: macos-14
+            chip: intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: swift test
+      - name: Package ${{ matrix.label }} app
+        run: ./package.sh "${{ matrix.arch }}"
+      - name: Verify app identity and architecture
+        run: |
+          test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleName' Qstats.app/Contents/Info.plist)" = Qstats
+          test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Qstats.app/Contents/Info.plist)" = "$(cat VERSION)"
+          test "$(lipo -archs Qstats.app/Contents/MacOS/Qstats)" = "${{ matrix.arch }}"
+      - name: Smoke test packaged app startup
+        run: |
+          softwareupdate --install-rosetta --agree-to-license 2>/dev/null || true
+          Qstats.app/Contents/MacOS/Qstats > startup.log 2>&1 &
+          app_pid=$!
+          sleep 3
+          if ! kill -0 "$app_pid" 2>/dev/null; then
+            cat startup.log
+            exit 1
+          fi
+          kill "$app_pid"
+      - name: Upload ${{ matrix.label }} installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Qstats-${{ github.run_number }}-macOS-${{ matrix.arch }}
+          path: |
+            Qstats-*-${{ matrix.chip }}.dmg
+            SHA256SUMS-${{ matrix.arch }}.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  release:
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Qstats-${{ github.run_number }}-macOS-*
+          path: dist
+          merge-multiple: true
+      - name: Publish both chip-specific installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_tag="v$(tr -d '[:space:]' < VERSION)"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            test "$GITHUB_REF_NAME" = "$release_tag"
+          fi
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            echo "Release $release_tag already exists; keeping its installers unchanged."
+            exit 0
+          fi
+          test -f "dist/Qstats-$(cat VERSION)-apple-silicon.dmg"
+          test -f "dist/Qstats-$(cat VERSION)-intel.dmg"
+          gh release create "$release_tag" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "Qstats $release_tag" \
+            --generate-notes \
+            --latest
