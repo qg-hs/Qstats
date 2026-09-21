@@ -30,16 +30,42 @@
 
 ## 下载与安装
 
-支持 **macOS 13 及以上**。从 [Releases 最新版本](https://github.com/qg-hs/Qstats/releases/latest) 按芯片下载：
+支持 **macOS 13 及以上**（Apple Silicon / Intel）。
 
-| Mac | 安装包 |
+### 方式一：Homebrew 安装（推荐）
+
+```bash
+# 1. 添加 Tap 仓库
+brew tap qg-hs/tap
+
+# 2. 安装 Qstats
+brew install --cask qstats
+```
+
+> 后续可通过 `brew upgrade --cask qstats` 一键更新。
+
+---
+
+### 方式二：手动下载 DMG
+
+从 [Releases 最新版本](https://github.com/qg-hs/Qstats/releases/latest) 按芯片下载对应安装包：
+
+| 芯片架构 | 安装包 |
 | --- | --- |
-| Apple Silicon：M1 / M2 / M3 / M4 | `Qstats-1.2.0-apple-silicon.dmg` |
-| Intel | `Qstats-1.2.0-intel.dmg` |
+| Apple Silicon（M1 / M2 / M3 / M4） | `Qstats-1.2.0-apple-silicon.dmg` |
+| Intel 处理器 | `Qstats-1.2.0-intel.dmg` |
 
-打开 DMG，将 **Qstats.app** 拖到 Applications。应用为本地 ad-hoc 签名，尚未经过 Apple 公证；首次打开被拦截时，请在「系统设置 → 隐私与安全性」中选择「仍要打开」。
+打开 DMG，将 **Qstats.app** 拖拽至 `Applications`（应用程序）目录。
 
-公开 Release 无需登录 GitHub。每个架构附带独立 SHA-256 校验文件。
+> [!TIP]
+> **首次打开提示“已损坏”或无法打开？**
+> 
+> 本项目为开源软件，未加入 Apple 付费开发者公证。若首次打开被系统 Gatekeeper 拦截，请在终端执行以下命令清除隔离属性即可正常运行：
+> ```bash
+> xattr -d com.apple.quarantine /Applications/Qstats.app
+> ```
+> 亦可在「系统设置 → 隐私与安全性」中选择「仍要打开」。
+
 
 ## 使用截图
 
