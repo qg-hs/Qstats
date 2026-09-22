@@ -83,10 +83,14 @@ final class ScreenshotToolbarView: NSVisualEffectView {
                                             action: #selector(pin)))
         stack.addArrangedSubview(makeButton(symbol: "square.and.arrow.down", title: "保存截图到文件", shortcut: "⌘S",
                                             action: #selector(save)))
-        stack.addArrangedSubview(makeButton(symbol: "doc.on.doc", title: "复制并完成", shortcut: "↩ / 双击",
+        stack.addArrangedSubview(makeButton(symbol: "doc.on.doc", title: "复制并完成", shortcut: "双击",
                                             action: #selector(copyImage)))
         stack.addArrangedSubview(makeButton(symbol: "xmark", title: "取消退出", shortcut: "Esc",
                                             action: #selector(close)))
+        let confirmButton = makeButton(symbol: "checkmark", title: "完成截图并复制", shortcut: "↩",
+                                       action: #selector(copyImage))
+        confirmButton.contentTintColor = ScreenshotDesignTokens.iconPrimary
+        stack.addArrangedSubview(confirmButton)
 
         setSelectedTool(.rectangle)
     }

@@ -11,6 +11,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var screenshotShortcut = KeyboardShortcut.defaultScreenshot
     private var config = AppConfig()
 
+    /// overlay 已覆盖在菜单上方，等待 menuDidClose 后激活交互焦点
+    private var pendingOverlayActivation = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppConfig.createDefaultIfNeeded()
         config = AppConfig.load()
@@ -36,6 +39,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu = NSMenu()
         menu.delegate = self
         menu.autoenablesItems = false
+        // 限制菜单最小宽度，防止过宽
+        menu.minimumWidth = 200
         menuBuilder = StatsMenuBuilder(config: config)
         menuBuilder.buildMenu(menu)
         menuBuilder.update(snapshot: statusBarController.snapshot)
@@ -68,7 +73,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         shortcutItem.submenu = shortcutMenu
         menu.addItem(shortcutItem)
 
-        let pinClipboard = NSMenuItem(title: "将剪贴板图片贴到桌面", action: #selector(pinClipboardImage), keyEquivalent: "")
+        let pinClipboard = NSMenuItem(title: "剪贴板贴图", action: #selector(pinClipboardImage), keyEquivalent: "")
         pinClipboard.target = self
         pinClipboard.image = NSImage(systemSymbolName: "pin", accessibilityDescription: "贴图")
         menu.addItem(pinClipboard)
@@ -117,8 +122,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(appearanceItem)
         menu.addItem(.separator())
 
-        // MARK: - 关键改动 2：添加“版本更新”与“关于”
-        let checkUpdateItem = NSMenuItem(title: "检查版本更新…", action: #selector(checkForUpdates), keyEquivalent: "")
+        // MARK: - 关键改动 2：添加"版本更新"与"关于"
+        let checkUpdateItem = NSMenuItem(title: "检查更新…", action: #selector(checkForUpdates), keyEquivalent: "")
         checkUpdateItem.target = self
         checkUpdateItem.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: "检查更新")
         menu.addItem(checkUpdateItem)
@@ -175,11 +180,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         apply(candidate)
     }
 
+    // MARK: - 截图核心调度（Seamless Overlay 架构）
     @objc private func startScreenshot() {
+        if screenshotCoordinator.isCapturing {
+            screenshotCoordinator.cancelCapture()
+            return
+        }
+
         if menuIsOpen {
+            // 防抖：已有 overlay 正在等待激活，忽略重复按键
+            guard !pendingOverlayActivation else { return }
+
+            // 同步直接在当前主线程捕获屏幕像素（CGDisplayCreateImage 耗时 <8ms），
+            // 确保 100% 捕获展开中的菜单，且完全避免子线程延迟导致的界面撕裂与闪烁
+            guard let captures = screenshotCoordinator.captureScreensOnly() else { return }
+
+            // ① 立即把 overlay window 盖在菜单上方（.screenSaver 层级高于菜单）
+            //    底图已含菜单画面，用户视觉上菜单完全没有闪烁或消失
+            screenshotCoordinator.showOverlay(captures)
+            pendingOverlayActivation = true
+
+            // ② 再关闭真实菜单（此时菜单已被 overlay 完全遮挡，退出模态追踪）
             menu.cancelTrackingWithoutAnimation()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-                self?.screenshotCoordinator.startCapture()
+
+            // ③ 注入空事件打破 nextEventMatchingMask 阻塞
+            if let evt = NSEvent.otherEvent(
+                with: .applicationDefined,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: 0,
+                context: nil,
+                subtype: 0,
+                data1: 0,
+                data2: 0
+            ) {
+                NSApplication.shared.postEvent(evt, atStart: true)
+            }
+
+            // ④ 容错保障：0.15s 后若 menuDidClose 尚未回调，强制激活交互
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard let self, self.pendingOverlayActivation else { return }
+                self.pendingOverlayActivation = false
+                self.screenshotCoordinator.activateOverlay()
             }
         } else {
             screenshotCoordinator.startCapture()
@@ -244,14 +287,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.runModal()
     }
 
-    // MARK: - 关键改动 2：采用专属毛玻璃现代化“关于”独立面板
+    // MARK: - 关键改动 2：采用专属毛玻璃现代化"关于"独立面板
     @objc private func showAbout() {
         AboutWindowController.shared.show()
     }
 
     // MARK: - 对接 GitHub 最新仓库版本更新检测
     @objc private func checkForUpdates() {
-        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2.0"
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.0"
         let repoAPI = "https://api.github.com/repos/qg-hs/Qstats/releases/latest"
         let releasesURL = URL(string: "https://github.com/qg-hs/Qstats/releases/latest")!
 
@@ -322,7 +365,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menuBuilder.update(snapshot: statusBarController.snapshot)
     }
 
-    func menuDidClose(_ menu: NSMenu) { menuIsOpen = false }
+    // MARK: - 菜单关闭后激活已覆盖的截图画布交互焦点
+    func menuDidClose(_ menu: NSMenu) {
+        menuIsOpen = false
+        if pendingOverlayActivation {
+            pendingOverlayActivation = false
+            // overlay 已在菜单上方显示，现在模态循环退出，激活键盘与鼠标焦点
+            DispatchQueue.main.async { [weak self] in
+                self?.screenshotCoordinator.activateOverlay()
+            }
+        }
+    }
 
     @objc private func quit() { NSApplication.shared.terminate(nil) }
 }

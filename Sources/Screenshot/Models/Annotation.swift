@@ -138,6 +138,21 @@ enum Annotation {
         }
         context.restoreGState()
     }
+
+    var isMosaic: Bool {
+        if case .mosaic = self { return true }
+        return false
+    }
+
+    var mosaicRect: NSRect? {
+        if case let .mosaic(rect, _) = self { return rect }
+        return nil
+    }
+
+    var mosaicScale: CGFloat? {
+        if case let .mosaic(_, scale) = self { return scale }
+        return nil
+    }
 }
 
 func normalizedRect(from start: NSPoint, to end: NSPoint) -> NSRect {

@@ -117,5 +117,73 @@ final class ScreenshotTests: XCTestCase {
         } else {
             XCTFail("Annotation must be .mosaic")
         }
+        XCTAssertTrue(mosaic.isMosaic)
+        XCTAssertEqual(mosaic.mosaicRect, NSRect(x: 10, y: 10, width: 60, height: 60))
+        XCTAssertEqual(mosaic.mosaicScale, 20.0)
+    }
+
+    func testToolbarContainsCheckmarkConfirmButton() {
+        let toolbar = ScreenshotToolbarView()
+        // 查找所有子视图中的按钮，验证存在 checkmark 图标按钮
+        func findButtons(in view: NSView) -> [NSButton] {
+            var buttons: [NSButton] = []
+            for sub in view.subviews {
+                if let btn = sub as? NSButton { buttons.append(btn) }
+                buttons.append(contentsOf: findButtons(in: sub))
+            }
+            return buttons
+        }
+        let buttons = findButtons(in: toolbar)
+        let checkmarkButtons = buttons.filter { btn in
+            btn.accessibilityLabel() == "完成截图并复制" || btn.image?.accessibilityDescription == "完成截图并复制"
+        }
+        XCTAssertEqual(checkmarkButtons.count, 1, "工具栏最右侧必须包含一个且仅一个 checkmark 完成截图按钮")
+    }
+
+    func testPinnedImageViewFourCornerDetection() {
+        let image = NSImage(size: NSSize(width: 400, height: 300))
+        let pinnedView = PinnedImageView(image: image)
+        pinnedView.frame = NSRect(x: 0, y: 0, width: 400, height: 300)
+
+        // 验证 resetCursorRects 不崩溃
+        pinnedView.resetCursorRects()
+
+        // 验证宽高比计算
+        let aspectRatio = image.size.width / image.size.height
+        XCTAssertEqual(aspectRatio, 4.0 / 3.0, accuracy: 0.001)
+
+        // 验证等比缩放计算：若宽度变为 200，高度必须按比例变为 150
+        let newWidth: CGFloat = 200.0
+        let newHeight = newWidth / aspectRatio
+        XCTAssertEqual(newHeight, 150.0, accuracy: 0.001)
+
+        // 验证控制器 resize 保持图片比例，杜绝形变
+        let controller = PinnedImageController(image: image)
+        controller.resize(by: 0.5) // 缩小
+        let shrunk = controller.panel.frame.size
+        XCTAssertEqual(shrunk.width / shrunk.height, aspectRatio, accuracy: 0.02)
+        controller.resize(by: 2.0) // 放大
+        let enlarged = controller.panel.frame.size
+        XCTAssertEqual(enlarged.width / enlarged.height, aspectRatio, accuracy: 0.02)
+        XCTAssertGreaterThan(enlarged.width, shrunk.width, "放大操作必须使尺寸严格大于缩小尺寸")
+    }
+
+    func testMosaicInteractiveHandleMath() {
+        let rect = NSRect(x: 50, y: 60, width: 100, height: 80)
+
+        // 4 角坐标验证
+        let topLeft = NSPoint(x: rect.minX, y: rect.maxY)
+        let topRight = NSPoint(x: rect.maxX, y: rect.maxY)
+        let bottomLeft = NSPoint(x: rect.minX, y: rect.minY)
+        let bottomRight = NSPoint(x: rect.maxX, y: rect.minY)
+
+        XCTAssertEqual(topLeft, NSPoint(x: 50, y: 140))
+        XCTAssertEqual(topRight, NSPoint(x: 150, y: 140))
+        XCTAssertEqual(bottomLeft, NSPoint(x: 50, y: 60))
+        XCTAssertEqual(bottomRight, NSPoint(x: 150, y: 60))
+
+        // 4 角对角拉动 normalizedRect 几何一致性验证
+        let draggedFromTL = normalizedRect(from: bottomRight, to: NSPoint(x: 30, y: 160))
+        XCTAssertEqual(draggedFromTL, NSRect(x: 30, y: 60, width: 120, height: 100))
     }
 }

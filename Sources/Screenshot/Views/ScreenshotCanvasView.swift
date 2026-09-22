@@ -71,6 +71,14 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
     private var cachedMosaicCGImage: CGImage?
     private var cachedMosaicScale: CGFloat = -1
 
+    // 马赛克实体交互编辑状态（4角缩放、平移拖动、独立删除）
+    private var selectedMosaicIndex: Int?
+    private var activeMosaicCorner: SelectionHandle?
+    private var mosaicDragAnchor: NSPoint?
+    private var isDraggingMosaic: Bool = false
+    private var mosaicDragStartMouse: NSPoint = .zero
+    private var mosaicDragInitialRect: NSRect = .zero
+
     private var toolbar: ScreenshotToolbarView?
     private var textField: NSTextField?
     private var textEditor: NSView?
@@ -131,6 +139,28 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
             return
         }
 
+        // 若有选中的马赛克，优先注册其删除按钮、4角拉伸光标及内部移动光标
+        if let idx = selectedMosaicIndex, idx < annotations.count,
+           case let .mosaic(mRect, _) = annotations[idx], !mRect.isEmpty {
+            let delRect = mosaicDeleteButtonRect(for: mRect).intersection(bounds)
+            if !delRect.isEmpty {
+                addCursorRect(delRect, cursor: .pointingHand)
+            }
+            let hitRadius: CGFloat = 8.0
+            let corners = mosaicCornerPositions(for: mRect)
+            for (corner, pos) in corners {
+                let rect = NSRect(x: pos.x - hitRadius, y: pos.y - hitRadius,
+                                  width: hitRadius * 2, height: hitRadius * 2).intersection(bounds)
+                if !rect.isEmpty {
+                    addCursorRect(rect, cursor: cursor(for: corner))
+                }
+            }
+            let inner = mRect.intersection(bounds)
+            if !inner.isEmpty {
+                addCursorRect(inner, cursor: .openHand)
+            }
+        }
+
         // 优先注册 8 个边角拖拽控点的光标响应区
         let hitRadius: CGFloat = 9.0
         for handle in SelectionHandle.allCases {
@@ -183,7 +213,7 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
             }
             if let working = workingAnnotation {
                 working.draw(in: context, background: screenshot, canvasBounds: bounds, mosaicCache: mosaic)
-                // 关键改动 2：简约纯粹的马赛克框选边框，去除繁杂四角白圆点与粗黑阴影，使用 1.0pt 极简白透细线
+                // 简约纯粹的马赛克框选边框，使用 1.0pt 极简白透细线
                 if case let .mosaic(rect, _) = working {
                     context.saveGState()
                     context.setStrokeColor(NSColor.white.withAlphaComponent(0.85).cgColor)
@@ -195,6 +225,12 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         }
         NSGraphicsContext.restoreGraphicsState()
 
+        // 绘制当前选中的马赛克高亮边框、4角拉动手柄与右上角删除按钮（仅在交互叠加层显示，导出时自动跳过）
+        if let idx = selectedMosaicIndex, idx < annotations.count,
+           case let .mosaic(mRect, _) = annotations[idx], !mRect.isEmpty {
+            drawSelectedMosaicControls(mRect)
+        }
+
         // 选区外边框应用主题青绿配置色 (#43E9C9)
         ScreenshotDesignTokens.iconPrimary.setStroke()
         let border = NSBezierPath(rect: selection.insetBy(dx: 0.5, dy: 0.5))
@@ -202,6 +238,114 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         border.stroke()
         drawHandles()
         drawSizeBadge()
+    }
+
+    // MARK: - 选中马赛克交互控点与手柄绘制
+
+    private func mosaicCornerPositions(for rect: NSRect) -> [SelectionHandle: NSPoint] {
+        return [
+            .topLeft: NSPoint(x: rect.minX, y: rect.maxY),
+            .topRight: NSPoint(x: rect.maxX, y: rect.maxY),
+            .bottomLeft: NSPoint(x: rect.minX, y: rect.minY),
+            .bottomRight: NSPoint(x: rect.maxX, y: rect.minY)
+        ]
+    }
+
+    private func oppositeMosaicCorner(_ handle: SelectionHandle, in rect: NSRect) -> NSPoint {
+        switch handle {
+        case .topLeft: return NSPoint(x: rect.maxX, y: rect.minY)
+        case .topRight: return NSPoint(x: rect.minX, y: rect.minY)
+        case .bottomLeft: return NSPoint(x: rect.maxX, y: rect.maxY)
+        case .bottomRight: return NSPoint(x: rect.minX, y: rect.maxY)
+        default: return NSPoint(x: rect.midX, y: rect.midY)
+        }
+    }
+
+    private func mosaicDeleteButtonRect(for rect: NSRect) -> NSRect {
+        let size: CGFloat = 16.0
+        var x = rect.maxX - size / 2
+        var y = rect.maxY - size / 2
+        x = min(bounds.maxX - size - 2, max(bounds.minX + 2, x))
+        y = min(bounds.maxY - size - 2, max(bounds.minY + 2, y))
+        return NSRect(x: x, y: y, width: size, height: size)
+    }
+
+    private func hitMosaicCorner(at point: NSPoint, in rect: NSRect) -> SelectionHandle? {
+        let hitRadius: CGFloat = 8.0
+        let positions = mosaicCornerPositions(for: rect)
+        for (handle, pos) in positions {
+            let r = NSRect(x: pos.x - hitRadius, y: pos.y - hitRadius, width: hitRadius * 2, height: hitRadius * 2)
+            if r.contains(point) { return handle }
+        }
+        return nil
+    }
+
+    private func deleteSelectedMosaic() {
+        guard let index = selectedMosaicIndex, index < annotations.count else { return }
+        annotations.remove(at: index)
+        selectedMosaicIndex = nil
+        activeMosaicCorner = nil
+        mosaicDragAnchor = nil
+        isDraggingMosaic = false
+        overlayCanvas.needsDisplay = true
+        window?.invalidateCursorRects(for: self)
+    }
+
+    private func drawSelectedMosaicControls(_ rect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        ctx.saveGState()
+
+        // 1. 选中边框：主题青绿色，1.5pt 实线
+        let box = rect.insetBy(dx: 0.5, dy: 0.5)
+        let strokeColor = ScreenshotDesignTokens.iconPrimary
+        ctx.setStrokeColor(strokeColor.cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.stroke(box)
+
+        // 2. 4 角缩放手柄（白色圆填充 + 青绿描边 + 投影）
+        let handleRadius: CGFloat = 4.0
+        let corners = mosaicCornerPositions(for: rect)
+        for (_, pos) in corners {
+            let handleRect = CGRect(x: pos.x - handleRadius, y: pos.y - handleRadius,
+                                    width: handleRadius * 2, height: handleRadius * 2)
+            ctx.saveGState()
+            ctx.setShadow(offset: CGSize(width: 0, height: -1), blur: 3,
+                          color: NSColor.black.withAlphaComponent(0.45).cgColor)
+            ctx.setFillColor(NSColor.white.cgColor)
+            ctx.fillEllipse(in: handleRect)
+            ctx.restoreGState()
+
+            ctx.setStrokeColor(strokeColor.cgColor)
+            ctx.setLineWidth(1.5)
+            ctx.strokeEllipse(in: handleRect)
+        }
+
+        // 3. 右上角微型删除按钮 (16x16，深红圆底 + 纯白清晰 xmark)
+        let delRect = mosaicDeleteButtonRect(for: rect)
+        ctx.saveGState()
+        ctx.setShadow(offset: CGSize(width: 0, height: -1), blur: 3,
+                      color: NSColor.black.withAlphaComponent(0.55).cgColor)
+        ctx.setFillColor(NSColor(red: 235 / 255.0, green: 55 / 255.0, blue: 55 / 255.0, alpha: 0.95).cgColor)
+        ctx.fillEllipse(in: delRect)
+        ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.5).cgColor)
+        ctx.setLineWidth(1.0)
+        ctx.strokeEllipse(in: delRect)
+        ctx.restoreGState()
+
+        // 绘制白色 xmark
+        ctx.saveGState()
+        ctx.setStrokeColor(NSColor.white.cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.setLineCap(.round)
+        let margin: CGFloat = 4.5
+        ctx.move(to: CGPoint(x: delRect.minX + margin, y: delRect.minY + margin))
+        ctx.addLine(to: CGPoint(x: delRect.maxX - margin, y: delRect.maxY - margin))
+        ctx.move(to: CGPoint(x: delRect.minX + margin, y: delRect.maxY - margin))
+        ctx.addLine(to: CGPoint(x: delRect.maxX - margin, y: delRect.minY + margin))
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        ctx.restoreGState()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -229,6 +373,56 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
             return
         }
         commitPendingText()
+
+        // 1. 若当前存在选中的马赛克，优先检测其删除按钮、4角拉伸手柄与内部拖动
+        if let idx = selectedMosaicIndex, idx < annotations.count,
+           case let .mosaic(mRect, _) = annotations[idx], !mRect.isEmpty {
+            let delRect = mosaicDeleteButtonRect(for: mRect)
+            if delRect.contains(point) {
+                deleteSelectedMosaic()
+                return
+            }
+            if let corner = hitMosaicCorner(at: point, in: mRect) {
+                activeMosaicCorner = corner
+                mosaicDragAnchor = oppositeMosaicCorner(corner, in: mRect)
+                return
+            }
+            if mRect.contains(point) {
+                isDraggingMosaic = true
+                mosaicDragStartMouse = point
+                mosaicDragInitialRect = mRect
+                return
+            }
+        }
+
+        // 2. 检查是否点击了其他已存在的马赛克
+        var hitExistingMosaicIndex: Int?
+        for (idx, ann) in annotations.enumerated().reversed() {
+            if case let .mosaic(rect, scale) = ann, rect.contains(point) {
+                hitExistingMosaicIndex = idx
+                currentMosaicScale = scale
+                toolbar?.setWidth(scale)
+                break
+            }
+        }
+        if let idx = hitExistingMosaicIndex {
+            selectedMosaicIndex = idx
+            if case let .mosaic(rect, _) = annotations[idx] {
+                isDraggingMosaic = true
+                mosaicDragStartMouse = point
+                mosaicDragInitialRect = rect
+            }
+            window?.invalidateCursorRects(for: self)
+            overlayCanvas.needsDisplay = true
+            return
+        }
+
+        // 点击空白处，取消选中当前马赛克
+        if selectedMosaicIndex != nil {
+            selectedMosaicIndex = nil
+            window?.invalidateCursorRects(for: self)
+            overlayCanvas.needsDisplay = true
+        }
 
         // 检查是否命中 8 边方向拖拽控点
         if let handle = hitHandle(at: point) {
@@ -262,6 +456,32 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
     override func mouseDragged(with event: NSEvent) {
         let point = clamped(convert(event.locationInWindow, from: nil))
 
+        // 1. 正在拖拽马赛克 4 角缩放
+        if activeMosaicCorner != nil, let anchor = mosaicDragAnchor,
+           let idx = selectedMosaicIndex, idx < annotations.count,
+           case let .mosaic(_, scale) = annotations[idx] {
+            let rawRect = normalizedRect(from: anchor, to: point)
+            let newRect = rawRect.intersection(selection)
+            annotations[idx] = .mosaic(rect: newRect, scale: scale)
+            overlayCanvas.needsDisplay = true
+            return
+        }
+
+        // 2. 正在平移拖动马赛克
+        if isDraggingMosaic, let idx = selectedMosaicIndex, idx < annotations.count,
+           case let .mosaic(_, scale) = annotations[idx] {
+            let dx = point.x - mosaicDragStartMouse.x
+            let dy = point.y - mosaicDragStartMouse.y
+            var newRect = mosaicDragInitialRect.offsetBy(dx: dx, dy: dy)
+            if newRect.minX < selection.minX { newRect.origin.x = selection.minX }
+            if newRect.maxX > selection.maxX { newRect.origin.x = selection.maxX - newRect.width }
+            if newRect.minY < selection.minY { newRect.origin.y = selection.minY }
+            if newRect.maxY > selection.maxY { newRect.origin.y = selection.maxY - newRect.height }
+            annotations[idx] = .mosaic(rect: newRect, scale: scale)
+            overlayCanvas.needsDisplay = true
+            return
+        }
+
         // 正在拖拽 8 边控点缩放选区
         if let handle = activeHandle, let anchor = dragAnchorPoint {
             switch handle {
@@ -276,7 +496,7 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
                 let xMax = max(anchor.x, point.x)
                 selection = NSRect(x: xMin, y: selection.minY, width: xMax - xMin, height: selection.height).intersection(bounds)
             }
-            // 关键改动 1：刷新极轻量叠加层，耗时 < 0.1ms，高刷满帧流畅
+            // 刷新极轻量叠加层，耗时 < 0.1ms，高刷满帧流畅
             overlayCanvas.needsDisplay = true
             return
         }
@@ -296,6 +516,16 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
     }
 
     override func mouseUp(with event: NSEvent) {
+        // 完成马赛克 4 角缩放或拖拽
+        if activeMosaicCorner != nil || isDraggingMosaic {
+            activeMosaicCorner = nil
+            mosaicDragAnchor = nil
+            isDraggingMosaic = false
+            window?.invalidateCursorRects(for: self)
+            overlayCanvas.needsDisplay = true
+            return
+        }
+
         // 完成 8 边控点拖拽
         if activeHandle != nil {
             activeHandle = nil
@@ -328,14 +558,27 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         // 完成标注图元
         if let annotation = workingAnnotation {
             annotations.append(annotation)
+            // 若新添加的是马赛克，自动进入选中编辑状态，方便立即微调
+            if case .mosaic = annotation {
+                selectedMosaicIndex = annotations.count - 1
+            } else {
+                selectedMosaicIndex = nil
+            }
             workingAnnotation = nil
             annotationStart = nil
             workingPoints.removeAll(keepingCapacity: true)
+            window?.invalidateCursorRects(for: self)
             overlayCanvas.needsDisplay = true
         }
     }
 
     override func keyDown(with event: NSEvent) {
+        // 支持 Delete (keyCode 51) 或 ForwardDelete (keyCode 117) 移除选中的马赛克
+        if (event.keyCode == 51 || event.keyCode == 117) && selectedMosaicIndex != nil && textField == nil {
+            deleteSelectedMosaic()
+            return
+        }
+
         if event.keyCode == 53 {
             if sizeSliderView != nil {
                 dismissSizeSlider()
@@ -343,6 +586,12 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
             }
             if colorPickerView != nil {
                 dismissColorPicker()
+                return
+            }
+            if selectedMosaicIndex != nil {
+                selectedMosaicIndex = nil
+                overlayCanvas.needsDisplay = true
+                window?.invalidateCursorRects(for: self)
                 return
             }
             if textField != nil {
@@ -372,6 +621,7 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         dismissColorPicker()
         dismissSizeSlider()
         annotations.removeAll()
+        selectedMosaicIndex = nil
         selection = .zero
         selectionStart = clamped(point)
         overlayCanvas.needsDisplay = true
@@ -715,7 +965,9 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
     private func undoLast() {
         if !annotations.isEmpty {
             annotations.removeLast()
+            selectedMosaicIndex = nil
             overlayCanvas.needsDisplay = true
+            window?.invalidateCursorRects(for: self)
         }
     }
 
@@ -882,6 +1134,10 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
             currentMosaicScale = max(4, size)
             // 模糊度更新时使缓存刷新
             warmupMosaicCache(scale: currentMosaicScale)
+            if let idx = selectedMosaicIndex, idx < annotations.count,
+               case let .mosaic(rect, _) = annotations[idx] {
+                annotations[idx] = .mosaic(rect: rect, scale: currentMosaicScale)
+            }
         default:
             currentStrokeWidth = max(1, size)
         }
@@ -913,6 +1169,11 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
             currentMosaicScale = currentMosaicScale >= 32 ? 8 : currentMosaicScale + 6
             warmupMosaicCache(scale: currentMosaicScale)
             toolbar.setWidth(currentMosaicScale)
+            if let idx = selectedMosaicIndex, idx < annotations.count,
+               case let .mosaic(rect, _) = annotations[idx] {
+                annotations[idx] = .mosaic(rect: rect, scale: currentMosaicScale)
+                overlayCanvas.needsDisplay = true
+            }
         default:
             currentStrokeWidth = currentStrokeWidth >= 16 ? 2 : currentStrokeWidth * 2
             toolbar.setWidth(currentStrokeWidth)

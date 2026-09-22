@@ -31,8 +31,8 @@ final class StatsMenuBuilder {
         downItem = nil
         upItem = nil
 
-        // 顶部品牌标题头（紧凑字号，避免横向撑大菜单）
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2.0"
+        // 顶部品牌标题（紧凑布局）
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.0"
         let headerItem = NSMenuItem(title: "Qstats", action: nil, keyEquivalent: "")
         headerItem.isEnabled = false
 
@@ -83,7 +83,8 @@ final class StatsMenuBuilder {
         updateItem(cpuItem, label: cpuLabel, value: cpuVal,
                    valueColor: snapshot.cpu >= 80 ? .systemOrange : .secondaryLabelColor)
 
-        let memVal = String(format: "%.1f / %.1f GB (%.0f%%)",
+        // 内存：紧凑格式，减少菜单宽度
+        let memVal = String(format: "%.1f/%.1fG  %.0f%%",
                             snapshot.memory.usedGB, snapshot.memory.totalGB, snapshot.memory.percentage)
         updateItem(memoryItem, label: "内存", value: memVal,
                    valueColor: snapshot.memory.percentage >= 85 ? .systemOrange : .secondaryLabelColor)
@@ -91,7 +92,7 @@ final class StatsMenuBuilder {
         let gpuVal = snapshot.gpu >= 0 ? String(format: "%.1f%%", snapshot.gpu) : "不可用"
         updateItem(gpuItem, label: gpuLabel, value: gpuVal, valueColor: .secondaryLabelColor)
 
-        // 实时同步专属冷暖色谱，下载天蓝/极速青绿，上传暖黄/鲜橙/玫瑰粉
+        // 实时同步专属冷暖色谱
         let downColor = NetworkWidget.downloadColor(forBytesPerSec: snapshot.network.bytesInPerSec)
         updateItem(downItem, label: "下载", value: snapshot.network.formattedIn, valueColor: downColor)
 
@@ -112,13 +113,13 @@ final class StatsMenuBuilder {
         return item
     }
 
-    // 关键改动：优化制表位宽度为 160pt（此前 230pt 过宽导致横向冗余撑大），实现紧凑精致右对齐
+    /// 制表位收窄至 120pt（从 160pt 进一步压缩），配合紧凑内存格式控制菜单整体宽度
     private func updateItem(_ item: NSMenuItem?, label: String, value: String, valueColor: NSColor = .secondaryLabelColor) {
         guard let item else { return }
 
         let paragraph = NSMutableParagraphStyle()
         paragraph.tabStops = [
-            NSTextTab(textAlignment: .right, location: 160, options: [:])
+            NSTextTab(textAlignment: .right, location: 120, options: [:])
         ]
 
         let attrStr = NSMutableAttributedString()
@@ -133,7 +134,7 @@ final class StatsMenuBuilder {
         attrStr.append(NSAttributedString(
             string: value,
             attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .semibold),
+                .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .semibold),
                 .foregroundColor: valueColor,
                 .paragraphStyle: paragraph,
             ]

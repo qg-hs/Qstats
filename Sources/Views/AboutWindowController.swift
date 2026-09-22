@@ -44,7 +44,7 @@ final class AboutWindowController: NSWindowController {
         container.autoresizingMask = [.width, .height]
         visualEffect.addSubview(container)
 
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2.0"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.0"
 
         // 2. 软件主图标（高清圆角、微光边框与物理投影）
         let iconSize: CGFloat = 68
@@ -102,7 +102,7 @@ final class AboutWindowController: NSWindowController {
         badgeView.layer?.borderWidth = 1.0
         badgeView.layer?.borderColor = versionBorderColor.cgColor
 
-        let versionLabel = NSTextField(labelWithString: "v\(version) · Build 120")
+        let versionLabel = NSTextField(labelWithString: "v\(version) · Build 130")
         versionLabel.frame = NSRect(x: 0, y: 1, width: badgeW, height: badgeH - 1)
         versionLabel.alignment = .center
         versionLabel.font = .monospacedSystemFont(ofSize: 11, weight: .bold)
