@@ -292,53 +292,36 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AboutWindowController.shared.show()
     }
 
-    // MARK: - 对接 GitHub 最新仓库版本更新检测
+    // MARK: - 对接 GitHub 最新仓库版本更新检测（带 API 频控降级 Fallback 容灾）
     @objc private func checkForUpdates() {
         let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.0"
         let repoAPI = "https://api.github.com/repos/qg-hs/Qstats/releases/latest"
+        let fallbackURL = "https://raw.githubusercontent.com/qg-hs/Qstats/main/VERSION"
         let releasesURL = URL(string: "https://github.com/qg-hs/Qstats/releases/latest")!
 
-        guard let url = URL(string: repoAPI) else { return }
+        guard let apiURL = URL(string: repoAPI) else { return }
 
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: apiURL)
         request.timeoutInterval = 8
         request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
         request.setValue("Qstats-macOS", forHTTPHeaderField: "User-Agent")
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        // 统一展示版本结果弹窗
+        func presentVersionAlert(remoteVersion: String, body: String?) {
             DispatchQueue.main.async {
                 NSApplication.shared.activate(ignoringOtherApps: true)
                 let alert = NSAlert()
                 alert.alertStyle = .informational
 
-                guard let data, error == nil,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let tagName = json["tag_name"] as? String else {
-                    alert.messageText = "版本更新检查"
-                    alert.informativeText = "当前安装版本：Qstats v\(currentVersion)\n未能连接到 GitHub Releases API（或仓库暂未发布正式 Release）。您可以直接前往 GitHub 仓库主页查看最新动态。"
-                    alert.addButton(withTitle: "前往 GitHub Releases")
-                    alert.addButton(withTitle: "取消")
-                    if alert.runModal() == .alertFirstButtonReturn {
-                        NSWorkspace.shared.open(releasesURL)
-                    }
-                    return
-                }
-
-                let remoteVersion = tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
                 let hasNewVersion = remoteVersion.compare(currentVersion, options: .numeric) == .orderedDescending
-
                 if hasNewVersion {
                     alert.messageText = "发现新版本 Qstats v\(remoteVersion)"
-                    let body = json["body"] as? String ?? "包含最新性能优化、UI 改进与问题修复。"
-                    alert.informativeText = "检测到可用更新：v\(remoteVersion)（当前运行：v\(currentVersion)）。\n\n更新内容：\n\(body.prefix(320))"
+                    let desc = body ?? "包含最新功能更新、UI 改进与性能优化。"
+                    alert.informativeText = "检测到可用更新：v\(remoteVersion)（当前运行：v\(currentVersion)）。\n\n更新内容：\n\(desc.prefix(320))"
                     alert.addButton(withTitle: "立即下载新版本")
                     alert.addButton(withTitle: "稍后")
                     if alert.runModal() == .alertFirstButtonReturn {
-                        if let htmlUrlStr = json["html_url"] as? String, let htmlUrl = URL(string: htmlUrlStr) {
-                            NSWorkspace.shared.open(htmlUrl)
-                        } else {
-                            NSWorkspace.shared.open(releasesURL)
-                        }
+                        NSWorkspace.shared.open(releasesURL)
                     }
                 } else {
                     alert.messageText = "已是最新版本"
@@ -350,6 +333,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     }
                 }
             }
+        }
+
+        // 降级 Fallback 通道：当 API 受限（如 HTTP 403 Rate Limit）时直接查询 raw 文本
+        func fallbackCheck() {
+            guard let rawURL = URL(string: fallbackURL) else { return }
+            var rawReq = URLRequest(url: rawURL)
+            rawReq.timeoutInterval = 5
+            rawReq.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            URLSession.shared.dataTask(with: rawReq) { data, _, _ in
+                if let data, let rawStr = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !rawStr.isEmpty {
+                    let cleaned = rawStr.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
+                    presentVersionAlert(remoteVersion: cleaned, body: nil)
+                } else {
+                    DispatchQueue.main.async {
+                        NSApplication.shared.activate(ignoringOtherApps: true)
+                        let alert = NSAlert()
+                        alert.alertStyle = .informational
+                        alert.messageText = "版本更新检查"
+                        alert.informativeText = "当前安装版本：Qstats v\(currentVersion)\n未能连接到 GitHub Releases 检查服务。您可以直接前往 GitHub 仓库主页查看最新动态。"
+                        alert.addButton(withTitle: "前往 GitHub Releases")
+                        alert.addButton(withTitle: "取消")
+                        if alert.runModal() == .alertFirstButtonReturn {
+                            NSWorkspace.shared.open(releasesURL)
+                        }
+                    }
+                }
+            }.resume()
+        }
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            guard let data, error == nil,
+                  let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tagName = json["tag_name"] as? String else {
+                // 主 API 异常（如 403 Rate Limit）时，无缝切换至 raw.githubusercontent.com 降级检测
+                fallbackCheck()
+                return
+            }
+
+            let remoteVersion = tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
+            let body = json["body"] as? String
+            presentVersionAlert(remoteVersion: remoteVersion, body: body)
         }.resume()
     }
 
