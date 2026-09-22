@@ -159,6 +159,9 @@ final class ScreenshotTests: XCTestCase {
 
         // 验证控制器 resize 保持图片比例，杜绝形变
         let controller = PinnedImageController(image: image)
+        XCTAssertTrue(controller.panel.canBecomeKey, "PinnedPanel 必须允许成为 key window 以响应快捷键与滚轮事件")
+        XCTAssertFalse(controller.panel.isMovableByWindowBackground, "必须禁用系统背景拖动，防止与四角拉伸竞争发生抖动")
+
         controller.resize(by: 0.5) // 缩小
         let shrunk = controller.panel.frame.size
         XCTAssertEqual(shrunk.width / shrunk.height, aspectRatio, accuracy: 0.02)
@@ -186,4 +189,43 @@ final class ScreenshotTests: XCTestCase {
         let draggedFromTL = normalizedRect(from: bottomRight, to: NSPoint(x: 30, y: 160))
         XCTAssertEqual(draggedFromTL, NSRect(x: 30, y: 60, width: 120, height: 100))
     }
+
+    func testScreenshotMagnifierViewCalculationsAndCopy() throws {
+        // 创建测试纯色位图 (100x100, 红色 #FF0000)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        var rawData = [UInt8](repeating: 0, count: 100 * 100 * 4)
+        for i in 0..<(100 * 100) {
+            rawData[i * 4] = 0xFF     // R
+            rawData[i * 4 + 1] = 0x00 // G
+            rawData[i * 4 + 2] = 0x00 // B
+            rawData[i * 4 + 3] = 0xFF // A
+        }
+        let provider = try XCTUnwrap(CGDataProvider(data: Data(rawData) as CFData))
+        let cgImage = try XCTUnwrap(CGImage(
+            width: 100, height: 100, bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: 400, space: colorSpace,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
+        ))
+
+        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let image = NSImage(cgImage: cgImage, size: NSSize(width: 100, height: 100))
+        let capture = CapturedScreen(screen: screen, image: image, cgImage: cgImage, scale: 1.0)
+
+        let magnifier = ScreenshotMagnifierView(capture: capture)
+        magnifier.update(cursorPoint: NSPoint(x: 50, y: 50), canvasBounds: NSRect(x: 0, y: 0, width: 1000, height: 1000))
+
+        // 验证 HEX 色值提取精准度
+        XCTAssertEqual(magnifier.currentColorHex, "#FF0000")
+
+        // 验证剪贴板复制动作
+        XCTAssertTrue(magnifier.copyCurrentColor())
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "#FF0000")
+
+        // 验证边界碰撞翻转：当光标靠近右下角边缘时，卡片必须自动翻转至光标左上方向
+        magnifier.update(cursorPoint: NSPoint(x: 990, y: 10), canvasBounds: NSRect(x: 0, y: 0, width: 1000, height: 1000))
+        XCTAssertLessThan(magnifier.frame.maxX, 990, "靠近屏幕右边缘时，卡片必须翻转至光标左侧")
+        XCTAssertGreaterThan(magnifier.frame.minY, 10, "靠近屏幕底边缘时，卡片必须翻转至光标上方")
+    }
 }
+

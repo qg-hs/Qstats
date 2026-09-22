@@ -85,6 +85,10 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
     private var pendingTextOrigin: NSPoint?
     private var isPresentingSavePanel = false
 
+    // 关键改动：取色放大镜检视卡片与鼠标移动追踪区
+    private let magnifierView: ScreenshotMagnifierView
+    private var canvasTrackingArea: NSTrackingArea?
+
     init(capture: CapturedScreen) {
         self.screenshot = capture.image
         self.captureScale = capture.scale
@@ -104,6 +108,11 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         overlay.layer?.backgroundColor = NSColor.clear.cgColor
         self.overlayCanvas = overlay
 
+        // 3. 取色放大镜层：光标未选区时跟随鼠标悬停放大采样像素与检视色值
+        let magnifier = ScreenshotMagnifierView(capture: capture)
+        magnifier.isHidden = true
+        self.magnifierView = magnifier
+
         super.init(frame: canvasBounds)
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
@@ -111,6 +120,7 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         overlay.canvasView = self
         addSubview(bg)
         addSubview(overlay)
+        addSubview(magnifier)
 
         // 预热马赛克滤镜缓存
         warmupMosaicCache(scale: currentMosaicScale)
@@ -348,7 +358,32 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         ctx.restoreGState()
     }
 
+    // 关键改动：注册全视口追踪区，持续派发高频 mouseMoved 事件
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = canvasTrackingArea {
+            removeTrackingArea(existing)
+        }
+        let options: NSTrackingArea.Options = [.mouseMoved, .activeAlways, .inVisibleRect]
+        let area = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
+        addTrackingArea(area)
+        self.canvasTrackingArea = area
+    }
+
+    // 关键改动：未开始框选时，实时刷新取色放大镜位置与采样数据
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let point = convert(event.locationInWindow, from: nil)
+        if selection.isEmpty {
+            magnifierView.isHidden = false
+            magnifierView.update(cursorPoint: point, canvasBounds: bounds)
+        } else {
+            magnifierView.isHidden = true
+        }
+    }
+
     override func mouseDown(with event: NSEvent) {
+        magnifierView.isHidden = true
         let point = convert(event.locationInWindow, from: nil)
 
         // 若采色器弹出，点击外部收起采色器
@@ -573,6 +608,17 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
     }
 
     override func keyDown(with event: NSEvent) {
+        // 关键改动：全屏未框选时，按 ⌘+C 或单键 C 复制取色放大镜当前提取的 HEX 颜色
+        if selection.isEmpty, !magnifierView.isHidden {
+            let chars = event.charactersIgnoringModifiers?.lowercased()
+            let isCmdC = event.modifierFlags.contains(.command) && chars == "c"
+            let isSingleC = chars == "c" && event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty
+            if isCmdC || isSingleC {
+                magnifierView.copyCurrentColor()
+                return
+            }
+        }
+
         // 支持 Delete (keyCode 51) 或 ForwardDelete (keyCode 117) 移除选中的马赛克
         if (event.keyCode == 51 || event.keyCode == 117) && selectedMosaicIndex != nil && textField == nil {
             deleteSelectedMosaic()
@@ -616,6 +662,7 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
     }
 
     private func beginSelection(at point: NSPoint) {
+        magnifierView.isHidden = true
         delegate?.screenshotCanvasDidBeginSelection(self)
         removeToolbar()
         dismissColorPicker()

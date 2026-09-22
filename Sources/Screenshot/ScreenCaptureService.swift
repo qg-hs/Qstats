@@ -4,6 +4,7 @@ import CoreGraphics
 struct CapturedScreen {
     let screen: NSScreen
     let image: NSImage
+    let cgImage: CGImage
     let scale: CGFloat
 }
 
@@ -54,7 +55,7 @@ final class ScreenCaptureService {
         guard cgImage.width > 0, cgImage.height > 0 else { return nil }
         let image = NSImage(cgImage: cgImage, size: screen.frame.size)
         let scale = CGFloat(cgImage.width) / max(1, screen.frame.width)
-        return CapturedScreen(screen: screen, image: image, scale: scale)
+        return CapturedScreen(screen: screen, image: image, cgImage: cgImage, scale: scale)
     }
 
     /// 快速抽样校验图像是否全黑

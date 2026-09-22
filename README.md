@@ -2,7 +2,7 @@
 <h1 align="center">Qstats</h1>
 <p align="center">轻量、免费、无需账号的 macOS 系统监控与截图工具。</p>
 
-![Version](https://img.shields.io/badge/version-1.4.0-teal)
+![Version](https://img.shields.io/badge/version-1.5.0-teal)
 ![macOS](https://img.shields.io/badge/macOS-13%2B-blue)
 ![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange)
 [![Build macOS apps](https://github.com/qg-hs/Qstats/actions/workflows/macos.yml/badge.svg)](https://github.com/qg-hs/Qstats/actions/workflows/macos.yml)
@@ -52,8 +52,8 @@ brew install --cask qstats
 
 | 芯片架构 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4） | `Qstats-1.4.0-apple-silicon.dmg` |
-| Intel 处理器 | `Qstats-1.4.0-intel.dmg` |
+| Apple Silicon（M1 / M2 / M3 / M4） | `Qstats-1.5.0-apple-silicon.dmg` |
+| Intel 处理器 | `Qstats-1.5.0-intel.dmg` |
 
 打开 DMG，将 **Qstats.app** 拖拽至 `Applications`（应用程序）目录。
 
@@ -155,8 +155,8 @@ swift test
 
 GitHub Actions 使用两个原生 runner 分别执行测试、编译、架构校验和启动检查：
 
-- Apple Silicon runner 生成 `Qstats-1.4.0-apple-silicon.dmg`
-- Intel runner 生成 `Qstats-1.4.0-intel.dmg`
+- Apple Silicon runner 生成 `Qstats-1.5.0-apple-silicon.dmg`
+- Intel runner 生成 `Qstats-1.5.0-intel.dmg`
 - 两边都成功后才自动发布 GitHub Release
 - 已发布的相同版本不会被后续提交覆盖
 
