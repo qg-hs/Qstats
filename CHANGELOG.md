@@ -1,5 +1,11 @@
 # Changelog
 
+## Qstats [1.4.0] - 2026-09-22
+
+- **版本更新检测双通道容灾架构（Dual-Channel Fallback）**：
+  - 新增 `raw.githubusercontent.com` 静态源 Fallback 容灾通道，当 GitHub REST API 遭遇匿名单 IP 60 次/小时频控限制（HTTP 403 Rate Limit）时，自动无缝降级进行版本核对，彻底根除检查更新报错。
+  - 优化更新提示与版本跳转交互，支持一键前往 GitHub Releases 获取最新安装包。
+
 ## Qstats [1.3.0] - 2026-09-22
 
 - **展开菜单无缝截图架构（Seamless Overlay）**：
