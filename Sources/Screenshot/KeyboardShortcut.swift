@@ -6,8 +6,15 @@ struct KeyboardShortcut: Codable, Equatable {
     let keyCode: UInt32
     let modifiers: UInt32
 
+    // 默认区域截图快捷键（⌥D）
     static let defaultScreenshot = KeyboardShortcut(
         keyCode: UInt32(kVK_ANSI_D),
+        modifiers: UInt32(optionKey)
+    )
+
+    // 关键改动：新增默认剪贴板贴图快捷键（⌥V）
+    static let defaultPinClipboard = KeyboardShortcut(
+        keyCode: UInt32(kVK_ANSI_V),
         modifiers: UInt32(optionKey)
     )
 
@@ -24,6 +31,31 @@ struct KeyboardShortcut: Codable, Equatable {
         if modifiers & UInt32(shiftKey) != 0 { value += "⇧" }
         if modifiers & UInt32(cmdKey) != 0 { value += "⌘" }
         return value + (Self.keyName(for: keyCode) ?? "?")
+    }
+
+    // 关键改动：提取用于 NSMenuItem 原生显示的快捷键字符（单字母转小写）
+    var keyEquivalentChar: String {
+        guard let name = Self.keyName(for: keyCode) else { return "" }
+        if name.count == 1 {
+            return name.lowercased()
+        }
+        switch keyCode {
+        case UInt32(kVK_Space): return " "
+        case UInt32(kVK_Return): return "\r"
+        case UInt32(kVK_Tab): return "\t"
+        case UInt32(kVK_Delete): return "\u{08}"
+        default: return ""
+        }
+    }
+
+    // 关键改动：转换为 NSMenuItem 原生修饰符掩码
+    var keyEquivalentModifierMask: NSEvent.ModifierFlags {
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers & UInt32(controlKey) != 0 { flags.insert(.control) }
+        if modifiers & UInt32(optionKey) != 0 { flags.insert(.option) }
+        if modifiers & UInt32(shiftKey) != 0 { flags.insert(.shift) }
+        if modifiers & UInt32(cmdKey) != 0 { flags.insert(.command) }
+        return flags
     }
 
     init(keyCode: UInt32, modifiers: UInt32) {
@@ -80,10 +112,12 @@ struct KeyboardShortcut: Codable, Equatable {
 }
 
 enum ShortcutPreferences {
-    private static let storageKey = "screenshotShortcut"
+    private static let screenshotKey = "screenshotShortcut"
+    // 关键改动：新增剪贴板贴图快捷键存储键名
+    private static let pinClipboardKey = "pinClipboardShortcut"
 
-    static func load(from defaults: UserDefaults = .standard) -> KeyboardShortcut {
-        guard let data = defaults.data(forKey: storageKey),
+    static func loadScreenshot(from defaults: UserDefaults = .standard) -> KeyboardShortcut {
+        guard let data = defaults.data(forKey: screenshotKey),
               let shortcut = try? JSONDecoder().decode(KeyboardShortcut.self, from: data),
               shortcut.isValid else {
             return .defaultScreenshot
@@ -91,8 +125,32 @@ enum ShortcutPreferences {
         return shortcut
     }
 
-    static func save(_ shortcut: KeyboardShortcut, to defaults: UserDefaults = .standard) {
+    static func saveScreenshot(_ shortcut: KeyboardShortcut, to defaults: UserDefaults = .standard) {
         guard shortcut.isValid, let data = try? JSONEncoder().encode(shortcut) else { return }
-        defaults.set(data, forKey: storageKey)
+        defaults.set(data, forKey: screenshotKey)
+    }
+
+    // 关键改动：剪贴板贴图快捷键读取与存储实现
+    static func loadPinClipboard(from defaults: UserDefaults = .standard) -> KeyboardShortcut {
+        guard let data = defaults.data(forKey: pinClipboardKey),
+              let shortcut = try? JSONDecoder().decode(KeyboardShortcut.self, from: data),
+              shortcut.isValid else {
+            return .defaultPinClipboard
+        }
+        return shortcut
+    }
+
+    static func savePinClipboard(_ shortcut: KeyboardShortcut, to defaults: UserDefaults = .standard) {
+        guard shortcut.isValid, let data = try? JSONEncoder().encode(shortcut) else { return }
+        defaults.set(data, forKey: pinClipboardKey)
+    }
+
+    // 向后兼容旧接口
+    static func load(from defaults: UserDefaults = .standard) -> KeyboardShortcut {
+        loadScreenshot(from: defaults)
+    }
+
+    static func save(_ shortcut: KeyboardShortcut, to defaults: UserDefaults = .standard) {
+        saveScreenshot(shortcut, to: defaults)
     }
 }

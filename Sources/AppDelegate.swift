@@ -9,6 +9,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let screenshotCoordinator = ScreenshotCoordinator()
     private var shortcutAvailable = true
     private var screenshotShortcut = KeyboardShortcut.defaultScreenshot
+    // 关键改动：新增剪贴板贴图全局快捷键状态
+    private var pinClipboardShortcut = KeyboardShortcut.defaultPinClipboard
     private var config = AppConfig()
 
     /// overlay 已覆盖在菜单上方，等待 menuDidClose 后激活交互焦点
@@ -18,9 +20,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AppConfig.createDefaultIfNeeded()
         config = AppConfig.load()
         statusBarController = StatusBarController(config: config)
+
+        // 注册区域截图全局热键
         GlobalHotKeyManager.shared.onScreenshot = { [weak self] in self?.startScreenshot() }
-        screenshotShortcut = ShortcutPreferences.load()
+        screenshotShortcut = ShortcutPreferences.loadScreenshot()
         shortcutAvailable = GlobalHotKeyManager.shared.registerScreenshotShortcut(screenshotShortcut)
+
+        // 关键改动：注册剪贴板贴图全局热键
+        GlobalHotKeyManager.shared.onPinClipboard = { [weak self] in self?.pinClipboardImage() }
+        pinClipboardShortcut = ShortcutPreferences.loadPinClipboard()
+        _ = GlobalHotKeyManager.shared.registerPinClipboardShortcut(pinClipboardShortcut)
+
+        // 绑定偏好设置窗口的双向数据与菜单联动回调
+        SettingsWindowController.shared.onConfigChanged = { [weak self] newConfig in
+            self?.apply(newConfig)
+        }
+        SettingsWindowController.shared.onShortcutChanged = { [weak self] in
+            guard let self else { return }
+            self.screenshotShortcut = ShortcutPreferences.loadScreenshot()
+            self.pinClipboardShortcut = ShortcutPreferences.loadPinClipboard()
+            self.rebuildMenu()
+        }
+
         rebuildMenu()
         poller = StatsPoller(config: config)
         poller.onUpdate = { [weak self] snapshot in
@@ -39,109 +60,48 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu = NSMenu()
         menu.delegate = self
         menu.autoenablesItems = false
-        // 限制菜单最小宽度，防止过宽
-        menu.minimumWidth = 200
+        // 关键改动：锁定菜单最小宽度为 220，配合网速定宽槽位彻底杜绝宽度变动抖动
+        menu.minimumWidth = 220
         menuBuilder = StatsMenuBuilder(config: config)
         menuBuilder.buildMenu(menu)
         menuBuilder.update(snapshot: statusBarController.snapshot)
 
-        // MARK: - 截图与贴图工具组
-        let screenshot = NSMenuItem(title: "区域截图", action: #selector(startScreenshot), keyEquivalent: "")
+        // MARK: - 截图与贴图工具组（关键改动：右侧原生显示快捷键符号，与设置、退出一致）
+        let screenshot = NSMenuItem(
+            title: "区域截图",
+            action: #selector(startScreenshot),
+            keyEquivalent: screenshotShortcut.keyEquivalentChar
+        )
+        screenshot.keyEquivalentModifierMask = screenshotShortcut.keyEquivalentModifierMask
         screenshot.target = self
         screenshot.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "区域截图")
         menu.addItem(screenshot)
 
-        let shortcutMenu = NSMenu(title: "截图快捷键")
-        shortcutMenu.autoenablesItems = false
-        let shortcutStatus = NSMenuItem(
-            title: shortcutAvailable ? "当前快捷键  \(screenshotShortcut.displayName)" : "\(screenshotShortcut.displayName) 已被占用",
-            action: nil,
-            keyEquivalent: ""
+        let pinClipboard = NSMenuItem(
+            title: "剪贴板贴图",
+            action: #selector(pinClipboardImage),
+            keyEquivalent: pinClipboardShortcut.keyEquivalentChar
         )
-        shortcutStatus.isEnabled = false
-        shortcutMenu.addItem(shortcutStatus)
-        shortcutMenu.addItem(.separator())
-        let customizeShortcut = NSMenuItem(title: "自定义快捷键…", action: #selector(customizeScreenshotShortcut), keyEquivalent: "")
-        customizeShortcut.target = self
-        shortcutMenu.addItem(customizeShortcut)
-        let resetShortcut = NSMenuItem(title: "恢复默认（⌥D）", action: #selector(resetScreenshotShortcut), keyEquivalent: "")
-        resetShortcut.target = self
-        resetShortcut.isEnabled = screenshotShortcut != .defaultScreenshot || !shortcutAvailable
-        shortcutMenu.addItem(resetShortcut)
-        let shortcutItem = NSMenuItem(title: "截图快捷键  \(screenshotShortcut.displayName)", action: nil, keyEquivalent: "")
-        shortcutItem.image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "截图快捷键")
-        shortcutItem.submenu = shortcutMenu
-        menu.addItem(shortcutItem)
-
-        let pinClipboard = NSMenuItem(title: "剪贴板贴图", action: #selector(pinClipboardImage), keyEquivalent: "")
+        pinClipboard.keyEquivalentModifierMask = pinClipboardShortcut.keyEquivalentModifierMask
         pinClipboard.target = self
         pinClipboard.image = NSImage(systemSymbolName: "pin", accessibilityDescription: "贴图")
         menu.addItem(pinClipboard)
         menu.addItem(.separator())
 
-        // MARK: - 偏好与样式设置组
-        let visibility = NSMenu(title: "菜单栏显示")
-        visibility.autoenablesItems = false
-        for metric in Metric.allCases {
-            let item = NSMenuItem(title: metric.title, action: #selector(toggleMetric(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = metric.rawValue
-            item.state = config.isVisible(metric) ? .on : .off
-            item.isEnabled = !config.isVisible(metric) || config.visibleMetricCount > 1
-            visibility.addItem(item)
-        }
-        visibility.addItem(.separator())
-        let all = NSMenuItem(title: "显示全部", action: #selector(showAll), keyEquivalent: "")
-        all.target = self
-        visibility.addItem(all)
-        let hint = NSMenuItem(title: "至少保留一项 · 自动保存", action: nil, keyEquivalent: "")
-        hint.isEnabled = false
-        visibility.addItem(hint)
-        let visibilityItem = NSMenuItem(title: "菜单栏显示", action: nil, keyEquivalent: "")
-        visibilityItem.image = NSImage(systemSymbolName: "menubar.rectangle", accessibilityDescription: "菜单栏显示")
-        visibilityItem.submenu = visibility
-        menu.addItem(visibilityItem)
-
-        let appearance = NSMenu(title: "显示样式")
-        for metric in [Metric.cpu, .memory, .gpu] {
-            let choices = NSMenu(title: metric.title)
-            for (style, title) in [("circle", "精简圆环"), ("bar", "圆角进度条"), ("vbar", "竖向进度条"), ("text", "百分比数字")] {
-                let item = NSMenuItem(title: title, action: #selector(changeStyle(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = [metric.rawValue, style]
-                item.state = config.style(for: metric) == style ? .on : .off
-                choices.addItem(item)
-            }
-            let item = NSMenuItem(title: metric.title, action: nil, keyEquivalent: "")
-            item.submenu = choices
-            appearance.addItem(item)
-        }
-        let appearanceItem = NSMenuItem(title: "显示样式", action: nil, keyEquivalent: "")
-        appearanceItem.image = NSImage(systemSymbolName: "slider.horizontal.3", accessibilityDescription: "显示样式")
-        appearanceItem.submenu = appearance
-        menu.addItem(appearanceItem)
-        menu.addItem(.separator())
-
-        // MARK: - 关键改动 2：添加"版本更新"与"关于"
-        let checkUpdateItem = NSMenuItem(title: "检查更新…", action: #selector(checkForUpdates), keyEquivalent: "")
-        checkUpdateItem.target = self
-        checkUpdateItem.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: "检查更新")
-        menu.addItem(checkUpdateItem)
+        // MARK: - 设置与关于（关键改动：检查更新移入“关于”面板，“设置”去除省略号）
+        let settingsItem = NSMenuItem(title: "设置", action: #selector(showSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "设置")
+        menu.addItem(settingsItem)
 
         let aboutItem = NSMenuItem(title: "关于", action: #selector(showAbout), keyEquivalent: "")
         aboutItem.target = self
         aboutItem.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "关于")
         menu.addItem(aboutItem)
-
-        // MARK: - 系统偏好与权限设置（自启与屏幕录制滑块开关）
-        let settingsItem = NSMenuItem(title: "设置…", action: #selector(showSettings), keyEquivalent: ",")
-        settingsItem.target = self
-        settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "设置")
-        menu.addItem(settingsItem)
         menu.addItem(.separator())
 
-        // MARK: - 退出应用
-        let quitItem = NSMenuItem(title: "退出 Qstats", action: #selector(quit), keyEquivalent: "q")
+        // MARK: - 退出应用（文案规范收敛为“退出”）
+        let quitItem = NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -161,29 +121,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             alert.informativeText = "请检查配置文件的写入权限。\n\(error.localizedDescription)"
             alert.runModal()
         }
-    }
-
-    @objc private func toggleMetric(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let metric = Metric(rawValue: raw) else { return }
-        var candidate = config
-        if candidate.toggle(metric) { apply(candidate) }
-    }
-
-    @objc private func showAll() {
-        var candidate = config
-        candidate.showCPU = true
-        candidate.showMemory = true
-        candidate.showGPU = true
-        candidate.showNetwork = true
-        apply(candidate)
-    }
-
-    @objc private func changeStyle(_ sender: NSMenuItem) {
-        guard let values = sender.representedObject as? [String], values.count == 2,
-              let metric = Metric(rawValue: values[0]) else { return }
-        var candidate = config
-        candidate.setStyle(values[1], for: metric)
-        apply(candidate)
     }
 
     // MARK: - 截图核心调度（Seamless Overlay 架构）
@@ -237,157 +174,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func pinClipboardImage() { screenshotCoordinator.pinClipboardImage() }
 
-    @objc private func customizeScreenshotShortcut() {
-        let alert = NSAlert()
-        alert.messageText = "设置区域截图快捷键"
-        alert.informativeText = "按下新的组合键，至少包含一个修饰键。"
-        let recorder = ShortcutRecorderView(shortcut: screenshotShortcut)
-        alert.accessoryView = recorder
-        alert.addButton(withTitle: "保存")
-        alert.addButton(withTitle: "取消")
-
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.window === alert.window else { return event }
-            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            if modifiers.isEmpty && [UInt16(53), UInt16(36), UInt16(48)].contains(event.keyCode) {
-                return event
-            }
-            guard let shortcut = KeyboardShortcut(event: event) else {
-                recorder.rejectInput()
-                return nil
-            }
-            recorder.shortcut = shortcut
-            return nil
-        }
-        defer { if let monitor { NSEvent.removeMonitor(monitor) } }
-
-        guard alert.runModal() == .alertFirstButtonReturn, let shortcut = recorder.shortcut else { return }
-        applyScreenshotShortcut(shortcut)
-    }
-
-    @objc private func resetScreenshotShortcut() {
-        applyScreenshotShortcut(.defaultScreenshot)
-    }
-
-    private func applyScreenshotShortcut(_ shortcut: KeyboardShortcut) {
-        let previous = screenshotShortcut
-        if GlobalHotKeyManager.shared.registerScreenshotShortcut(shortcut) {
-            screenshotShortcut = shortcut
-            shortcutAvailable = true
-            ShortcutPreferences.save(shortcut)
-        } else {
-            shortcutAvailable = GlobalHotKeyManager.shared.registerScreenshotShortcut(previous)
-            showShortcutUnavailable(shortcut)
-        }
-        DispatchQueue.main.async { [weak self] in self?.rebuildMenu() }
-    }
-
-    private func showShortcutUnavailable(_ shortcut: KeyboardShortcut) {
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "快捷键 \(shortcut.displayName) 不可用"
-        alert.informativeText = "该组合键可能已被系统或其他应用占用。原快捷键保持不变。"
-        alert.addButton(withTitle: "好")
-        alert.runModal()
-    }
-
-    // MARK: - 关键改动 2：采用专属毛玻璃现代化"关于"独立面板
+    // MARK: - 专属毛玻璃现代化"关于"独立面板
     @objc private func showAbout() {
         AboutWindowController.shared.show()
     }
 
-    // MARK: - 偏好设置面板（自启与屏幕录制权限开关）
+    // MARK: - 偏好设置面板（整合快捷键、菜单栏指标显示、样式、自启与权限）
     @objc private func showSettings() {
-        SettingsWindowController.shared.show()
-    }
-
-    // MARK: - 对接 GitHub 最新仓库版本更新检测（带 API 频控降级 Fallback 容灾）
-    @objc private func checkForUpdates() {
-        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.0"
-        let repoAPI = "https://api.github.com/repos/qg-hs/Qstats/releases/latest"
-        let fallbackURL = "https://raw.githubusercontent.com/qg-hs/Qstats/main/VERSION"
-        let releasesURL = URL(string: "https://github.com/qg-hs/Qstats/releases/latest")!
-
-        guard let apiURL = URL(string: repoAPI) else { return }
-
-        var request = URLRequest(url: apiURL)
-        request.timeoutInterval = 8
-        request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
-        request.setValue("Qstats-macOS", forHTTPHeaderField: "User-Agent")
-
-        // 统一展示版本结果弹窗
-        func presentVersionAlert(remoteVersion: String, body: String?) {
-            DispatchQueue.main.async {
-                NSApplication.shared.activate(ignoringOtherApps: true)
-                let alert = NSAlert()
-                alert.alertStyle = .informational
-
-                let hasNewVersion = remoteVersion.compare(currentVersion, options: .numeric) == .orderedDescending
-                if hasNewVersion {
-                    alert.messageText = "发现新版本 Qstats v\(remoteVersion)"
-                    let desc = body ?? "包含最新功能更新、UI 改进与性能优化。"
-                    alert.informativeText = "检测到可用更新：v\(remoteVersion)（当前运行：v\(currentVersion)）。\n\n更新内容：\n\(desc.prefix(320))"
-                    alert.addButton(withTitle: "立即下载新版本")
-                    alert.addButton(withTitle: "稍后")
-                    if alert.runModal() == .alertFirstButtonReturn {
-                        NSWorkspace.shared.open(releasesURL)
-                    }
-                } else {
-                    alert.messageText = "已是最新版本"
-                    alert.informativeText = "当前运行的 Qstats v\(currentVersion) 已经是最新版本，所有系统监控与截图组件均处于最新状态。"
-                    alert.addButton(withTitle: "好")
-                    alert.addButton(withTitle: "查看版本历史")
-                    if alert.runModal() == .alertSecondButtonReturn {
-                        NSWorkspace.shared.open(releasesURL)
-                    }
-                }
-            }
-        }
-
-        // 降级 Fallback 通道：当 API 受限（如 HTTP 403 Rate Limit）时直接查询 raw 文本
-        func fallbackCheck() {
-            guard let rawURL = URL(string: fallbackURL) else { return }
-            var rawReq = URLRequest(url: rawURL)
-            rawReq.timeoutInterval = 5
-            rawReq.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-            URLSession.shared.dataTask(with: rawReq) { data, _, _ in
-                if let data, let rawStr = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !rawStr.isEmpty {
-                    let cleaned = rawStr.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
-                    presentVersionAlert(remoteVersion: cleaned, body: nil)
-                } else {
-                    DispatchQueue.main.async {
-                        NSApplication.shared.activate(ignoringOtherApps: true)
-                        let alert = NSAlert()
-                        alert.alertStyle = .informational
-                        alert.messageText = "版本更新检查"
-                        alert.informativeText = "当前安装版本：Qstats v\(currentVersion)\n未能连接到 GitHub Releases 检查服务。您可以直接前往 GitHub 仓库主页查看最新动态。"
-                        alert.addButton(withTitle: "前往 GitHub Releases")
-                        alert.addButton(withTitle: "取消")
-                        if alert.runModal() == .alertFirstButtonReturn {
-                            NSWorkspace.shared.open(releasesURL)
-                        }
-                    }
-                }
-            }.resume()
-        }
-
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            guard let data, error == nil,
-                  let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tagName = json["tag_name"] as? String else {
-                // 主 API 异常（如 403 Rate Limit）时，无缝切换至 raw.githubusercontent.com 降级检测
-                fallbackCheck()
-                return
-            }
-
-            let remoteVersion = tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
-            let body = json["body"] as? String
-            presentVersionAlert(remoteVersion: remoteVersion, body: body)
-        }.resume()
+        SettingsWindowController.shared.show(with: config)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

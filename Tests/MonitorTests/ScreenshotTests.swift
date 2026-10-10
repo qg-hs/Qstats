@@ -28,6 +28,23 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertEqual(ShortcutPreferences.load(from: defaults), shortcut)
     }
 
+    func testDefaultPinClipboardShortcutIsOptionV() {
+        XCTAssertEqual(KeyboardShortcut.defaultPinClipboard.keyCode, UInt32(kVK_ANSI_V))
+        XCTAssertEqual(KeyboardShortcut.defaultPinClipboard.modifiers, UInt32(optionKey))
+        XCTAssertEqual(KeyboardShortcut.defaultPinClipboard.displayName, "⌥V")
+        XCTAssertEqual(KeyboardShortcut.defaultPinClipboard.keyEquivalentChar, "v")
+        XCTAssertEqual(KeyboardShortcut.defaultPinClipboard.keyEquivalentModifierMask, [.option])
+    }
+
+    func testPinClipboardShortcutPreferencesRoundTrip() throws {
+        let suiteName = "stats.tests.pinshortcut.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let shortcut = KeyboardShortcut(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(cmdKey | shiftKey))
+        ShortcutPreferences.savePinClipboard(shortcut, to: defaults)
+        XCTAssertEqual(ShortcutPreferences.loadPinClipboard(from: defaults), shortcut)
+    }
+
     func testNormalizedRectSupportsEveryDragDirection() {
         let expected = NSRect(x: 10, y: 20, width: 30, height: 40)
         XCTAssertEqual(normalizedRect(from: NSPoint(x: 10, y: 20), to: NSPoint(x: 40, y: 60)), expected)

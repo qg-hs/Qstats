@@ -2,7 +2,7 @@
 <h1 align="center">Qstats</h1>
 <p align="center">轻量、免费、无需账号的 macOS 系统监控与截图工具。</p>
 
-![Version](https://img.shields.io/badge/version-1.6.0-teal)
+![Version](https://img.shields.io/badge/version-1.7.0-teal)
 ![macOS](https://img.shields.io/badge/macOS-13%2B-blue)
 ![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange)
 [![Build macOS apps](https://github.com/qg-hs/Qstats/actions/workflows/macos.yml/badge.svg)](https://github.com/qg-hs/Qstats/actions/workflows/macos.yml)
@@ -15,11 +15,12 @@
 - 实时显示网络速度、CPU、内存和 GPU，默认全部开启。
 - 任意选择 1–4 项，不需要重启，设置自动保存。
 - CPU、内存、GPU 可分别使用精简圆环、圆角横条、竖条或百分比数字。
-- 紧凑双行网速、固定宽度数字、浅色和深色外观。
+- 紧凑单行网速（定宽防抖槽位）、固定宽度数字、浅色和深色外观。
 
 ### 截图与贴图
 
 - 按 `Option + D`（默认，可自定义）或点击菜单栏「区域截图」。
+- 按 `Option + V`（默认，可自定义）全局快速贴图剪贴板中的图片。
 - 多显示器、Retina 高分辨率截图和实时选区尺寸。
 - 简洁毛玻璃标注栏：矩形、箭头、画笔、马赛克、文字、颜色、线宽和撤销。
 - 复制 PNG、保存 PNG，或直接将截图置顶到桌面。
@@ -29,6 +30,7 @@
 ### 偏好设置与系统自启
 
 - 支持原生「开机自启动」一键开关（基于 macOS 13+ `SMAppService` 原生服务）。
+- 全面纳管快捷键录制（截图与贴图）、菜单栏指标显示、显示样式与系统授权。
 - 提供可视化「屏幕录制权限」授权感知与一键跳转系统设置引导。
 - 现代化毛玻璃 HUD 独立设置面板，快捷键 `⌘,` 快速调出。
 
@@ -56,8 +58,8 @@ brew install --cask qstats
 
 | 芯片架构 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4） | `Qstats-1.6.0-apple-silicon.dmg` |
-| Intel 处理器 | `Qstats-1.6.0-intel.dmg` |
+| Apple Silicon（M1 / M2 / M3 / M4） | `Qstats-1.7.0-apple-silicon.dmg` |
+| Intel 处理器 | `Qstats-1.7.0-intel.dmg` |
 
 打开 DMG，将 **Qstats.app** 拖拽至 `Applications`（应用程序）目录。
 

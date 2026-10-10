@@ -6,8 +6,8 @@ final class StatsMenuBuilder {
     private var cpuItem: NSMenuItem?
     private var memoryItem: NSMenuItem?
     private var gpuItem: NSMenuItem?
-    private var downItem: NSMenuItem?
-    private var upItem: NSMenuItem?
+    // 关键改动：将原本独立的上传与下载菜单项合并为单行展示容器
+    private var networkItem: NSMenuItem?
 
     private let config: AppConfig
     private let cpuLabel: String   // 如 "CPU (10)"
@@ -28,10 +28,9 @@ final class StatsMenuBuilder {
         cpuItem = nil
         memoryItem = nil
         gpuItem = nil
-        downItem = nil
-        upItem = nil
+        networkItem = nil
 
-        // 关键改动：移除原顶部 Qstats 版本行与分隔线，直接从监控项开始排列
+        // 监控项排布
         if config.showCPU {
             cpuItem = makeRow(icon: "cpu", label: cpuLabel, value: "—")
             menu.addItem(cpuItem!)
@@ -44,12 +43,13 @@ final class StatsMenuBuilder {
             gpuItem = makeRow(icon: "display", label: gpuLabel, value: "—")
             menu.addItem(gpuItem!)
         }
+        // 关键改动：上传、下载合并为单行显示，不占两行
         if config.showNetwork {
-            menu.addItem(NSMenuItem.separator())
-            downItem = makeRow(icon: "arrow.down.circle", label: "下载", value: "—")
-            menu.addItem(downItem!)
-            upItem = makeRow(icon: "arrow.up.circle", label: "上传", value: "—")
-            menu.addItem(upItem!)
+            if config.showCPU || config.showMemory || config.showGPU {
+                menu.addItem(NSMenuItem.separator())
+            }
+            networkItem = makeNetworkRow()
+            menu.addItem(networkItem!)
         }
 
         menu.addItem(NSMenuItem.separator())
@@ -69,12 +69,16 @@ final class StatsMenuBuilder {
         let gpuVal = snapshot.gpu >= 0 ? String(format: "%.1f%%", snapshot.gpu) : "不可用"
         updateItem(gpuItem, label: gpuLabel, value: gpuVal, valueColor: .secondaryLabelColor)
 
-        // 实时同步专属冷暖色谱
-        let downColor = NetworkWidget.downloadColor(forBytesPerSec: snapshot.network.bytesInPerSec)
-        updateItem(downItem, label: "下载", value: snapshot.network.formattedIn, valueColor: downColor)
-
-        let upColor = NetworkWidget.uploadColor(forBytesPerSec: snapshot.network.bytesOutPerSec)
-        updateItem(upItem, label: "上传", value: snapshot.network.formattedOut, valueColor: upColor)
+        // 关键改动：单行同时渲染下载与上传，实时同步专属冷暖色谱并保持定宽槽位防抖
+        if let networkItem {
+            let downColor = NetworkWidget.downloadColor(forBytesPerSec: snapshot.network.bytesInPerSec)
+            let upColor = NetworkWidget.uploadColor(forBytesPerSec: snapshot.network.bytesOutPerSec)
+            updateNetworkItem(networkItem,
+                              downText: snapshot.network.formattedIn,
+                              upText: snapshot.network.formattedOut,
+                              downColor: downColor,
+                              upColor: upColor)
+        }
     }
 
     private func makeRow(icon symbolName: String, label: String, value: String) -> NSMenuItem {
@@ -90,7 +94,21 @@ final class StatsMenuBuilder {
         return item
     }
 
-    /// 制表位收窄至 120pt（从 160pt 进一步压缩），配合紧凑内存格式控制菜单整体宽度
+    // 关键改动：构建合并后的网络速率单行项，采用双向箭头图标，初始占位符即为定宽槽位
+    private func makeNetworkRow() -> NSMenuItem {
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.isEnabled = true
+
+        if let img = NSImage(systemSymbolName: "arrow.up.arrow.down", accessibilityDescription: "网络速率") {
+            let symConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+            item.image = img.withSymbolConfiguration(symConfig)
+        }
+
+        updateNetworkItem(item, downText: "0 KB/s", upText: "0 KB/s", downColor: .secondaryLabelColor, upColor: .secondaryLabelColor)
+        return item
+    }
+
+    /// 制表位收窄至 120pt，配合紧凑内存格式控制菜单整体宽度
     private func updateItem(_ item: NSMenuItem?, label: String, value: String, valueColor: NSColor = .secondaryLabelColor) {
         guard let item else { return }
 
@@ -117,6 +135,47 @@ final class StatsMenuBuilder {
             ]
         ))
         item.attributedTitle = attrStr
+    }
+
+    // 关键改动：严格采用定宽槽位与等宽字体排版，杜绝因数值变化导致的菜单宽度抖动
+    private func updateNetworkItem(_ item: NSMenuItem?, downText: String, upText: String, downColor: NSColor, upColor: NSColor) {
+        guard let item else { return }
+
+        let formattedDown = Self.formatSlot(downText, targetLength: 10)
+        let formattedUp = Self.formatSlot(upText, targetLength: 10)
+
+        let attrStr = NSMutableAttributedString()
+        attrStr.append(NSAttributedString(
+            string: "↓ \(formattedDown)   ",
+            attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 11.5, weight: .semibold),
+                .foregroundColor: downColor,
+            ]
+        ))
+        attrStr.append(NSAttributedString(
+            string: "↑ \(formattedUp)",
+            attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 11.5, weight: .semibold),
+                .foregroundColor: upColor,
+            ]
+        ))
+        item.attributedTitle = attrStr
+    }
+
+    // 关键改动：严格归一化到固定槽位字符宽度，在等宽字体下确保物理渲染像素宽度绝对恒定
+    private static func formatSlot(_ text: String, targetLength: Int = 10) -> String {
+        var str = text
+        // 若超出目标长度（例如 1023.9 MB/s 占 11 字符），通过去除小数点后一位紧凑化为 1023 MB/s
+        if str.count > targetLength && str.contains(".") {
+            if let dotIdx = str.firstIndex(of: "."), let spaceIdx = str.firstIndex(of: " ") {
+                str.removeSubrange(dotIdx..<spaceIdx)
+            }
+        }
+        let count = str.count
+        if count >= targetLength {
+            return String(str.prefix(targetLength))
+        }
+        return String(repeating: " ", count: targetLength - count) + str
     }
 
     // Returns GPU core count from IOKit registry (Apple Silicon: e.g. 32 for M1 Max).

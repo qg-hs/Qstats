@@ -1,22 +1,53 @@
 import AppKit
 import ServiceManagement
 import CoreGraphics
+import Carbon.HIToolbox
 
-/// 高质感毛玻璃现代化“设置”偏好窗口控制器（含自启与屏幕录制权限的 NSSwitch 滑块控制及状态动态监听）
+/// 高质感毛玻璃现代化“设置”偏好窗口控制器
+/// 纳管：快捷键配置、菜单栏指标显示、图表样式、开机自启与系统屏幕录制权限
 final class SettingsWindowController: NSWindowController {
     static let shared = SettingsWindowController()
 
+    // 外部联动回调
+    var onConfigChanged: ((AppConfig) -> Void)?
+    var onShortcutChanged: (() -> Void)?
+
+    private enum ShortcutType {
+        case screenshot
+        case pinClipboard
+    }
+
+    // 快捷键展示胶囊
+    private var screenshotBadge: NSTextField!
+    private var screenshotResetBtn: NSButton!
+    private var pinBadge: NSTextField!
+    private var pinResetBtn: NSButton!
+
+    // 菜单栏显示指标复选框
+    private var metricCheckboxes: [Metric: NSButton] = [:]
+
+    // 样式选择弹窗按钮
+    private var stylePopups: [Metric: NSPopUpButton] = [:]
+
+    // 系统自启与权限控件
     private var autoStartSwitch: NSSwitch!
     private var autoStartStatusLabel: NSTextField!
-
     private var screenRecordSwitch: NSSwitch!
     private var screenRecordStatusBadge: NSTextField!
 
     private var activeObserver: NSObjectProtocol?
+    private var currentConfig = AppConfig()
+
+    private let styleOptions: [(key: String, title: String)] = [
+        ("circle", "精简圆环"),
+        ("bar", "圆角进度条"),
+        ("vbar", "竖向进度条"),
+        ("text", "百分比数字")
+    ]
 
     convenience init() {
-        let windowWidth: CGFloat = 380
-        let windowHeight: CGFloat = 290
+        let windowWidth: CGFloat = 430
+        let windowHeight: CGFloat = 590
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: windowWidth, height: windowHeight),
@@ -44,7 +75,7 @@ final class SettingsWindowController: NSWindowController {
     private func setupContentView() {
         guard let window = window else { return }
 
-        // 1. 底层高质感毛玻璃材质
+        // 底层毛玻璃材质
         let visualEffect = NSVisualEffectView(frame: window.contentView?.bounds ?? .zero)
         visualEffect.material = .hudWindow
         visualEffect.blendingMode = .behindWindow
@@ -52,14 +83,15 @@ final class SettingsWindowController: NSWindowController {
         visualEffect.autoresizingMask = [.width, .height]
         window.contentView = visualEffect
 
-        let container = NSView(frame: visualEffect.bounds)
-        container.autoresizingMask = [.width, .height]
-        visualEffect.addSubview(container)
+        let rootContainer = NSView(frame: visualEffect.bounds)
+        rootContainer.autoresizingMask = [.width, .height]
+        visualEffect.addSubview(rootContainer)
 
-        let contentW: CGFloat = 380
+        let contentW: CGFloat = 430
+        let contentH: CGFloat = 590
 
-        // 2. 顶部标题栏图标与文案
-        let headerIcon = NSImageView(frame: NSRect(x: 24, y: 236, width: 28, height: 28))
+        // 1. 顶部 Header 标题栏
+        let headerIcon = NSImageView(frame: NSRect(x: 24, y: contentH - 46, width: 28, height: 28))
         if let icon = NSImage(systemSymbolName: "gearshape.fill", accessibilityDescription: "设置") {
             let iconConfig = NSImage.SymbolConfiguration(pointSize: 22, weight: .semibold)
             headerIcon.image = icon.withSymbolConfiguration(iconConfig)
@@ -69,92 +101,180 @@ final class SettingsWindowController: NSWindowController {
                     : NSColor(red: 13 / 255.0, green: 148 / 255.0, blue: 136 / 255.0, alpha: 1.0)
             }
         }
-        container.addSubview(headerIcon)
+        rootContainer.addSubview(headerIcon)
 
         let titleLabel = NSTextField(labelWithString: "偏好设置")
-        titleLabel.frame = NSRect(x: 60, y: 242, width: 200, height: 22)
+        titleLabel.frame = NSRect(x: 60, y: contentH - 40, width: 200, height: 22)
         titleLabel.font = .systemFont(ofSize: 16, weight: .bold)
         titleLabel.textColor = .labelColor
-        container.addSubview(titleLabel)
+        rootContainer.addSubview(titleLabel)
 
-        let subtitleLabel = NSTextField(labelWithString: "管理系统自启行为与核心功能授权")
-        subtitleLabel.frame = NSRect(x: 60, y: 226, width: 280, height: 16)
+        let subtitleLabel = NSTextField(labelWithString: "快捷键、指标监控、图表样式与系统授权")
+        subtitleLabel.frame = NSRect(x: 60, y: contentH - 56, width: 320, height: 16)
         subtitleLabel.font = .systemFont(ofSize: 11, weight: .regular)
         subtitleLabel.textColor = .secondaryLabelColor
-        container.addSubview(subtitleLabel)
+        rootContainer.addSubview(subtitleLabel)
 
-        // 3. 卡片 1：开机自启动设置卡片
-        let card1 = createCardView(frame: NSRect(x: 20, y: 136, width: contentW - 40, height: 72))
-        container.addSubview(card1)
+        // 2. 滚动区域包裹所有卡片
+        let bottomBarHeight: CGFloat = 48
+        let topHeaderHeight: CGFloat = 64
+        let scrollY = bottomBarHeight
+        let scrollH = contentH - bottomBarHeight - topHeaderHeight
 
-        let autoStartIcon = NSImageView(frame: NSRect(x: 14, y: 24, width: 24, height: 24))
-        if let icon = NSImage(systemSymbolName: "bolt.horizontal.circle.fill", accessibilityDescription: "开机自启") {
-            let conf = NSImage.SymbolConfiguration(pointSize: 20, weight: .medium)
-            autoStartIcon.image = icon.withSymbolConfiguration(conf)
-            autoStartIcon.contentTintColor = .systemTeal
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: scrollY, width: contentW, height: scrollH))
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+
+        let totalCardsHeight: CGFloat = 530
+        let clipView = NSClipView(frame: NSRect(x: 0, y: 0, width: contentW, height: scrollH))
+        clipView.drawsBackground = false
+        scrollView.contentView = clipView
+
+        let cardsContainer = NSFlippedView(frame: NSRect(x: 0, y: 0, width: contentW, height: totalCardsHeight))
+        scrollView.documentView = cardsContainer
+        rootContainer.addSubview(scrollView)
+
+        // MARK: - 卡片 1：全局快捷键设置板块（区域截图 + 剪贴板贴图）
+        let card1 = createCardView(frame: NSRect(x: 20, y: 8, width: contentW - 40, height: 114))
+        cardsContainer.addSubview(card1)
+
+        let shortcutHeader = createSectionHeader(icon: "keyboard.fill", title: "全局快捷键设置")
+        shortcutHeader.frame = NSRect(x: 14, y: 12, width: 200, height: 18)
+        card1.addSubview(shortcutHeader)
+
+        // 行 1：区域截图
+        let (row1Badge, row1Reset) = buildShortcutRow(
+            in: card1, y: 38,
+            iconName: "viewfinder",
+            title: "区域截图",
+            type: .screenshot
+        )
+        screenshotBadge = row1Badge
+        screenshotResetBtn = row1Reset
+
+        // 行 2：剪贴板贴图
+        let (row2Badge, row2Reset) = buildShortcutRow(
+            in: card1, y: 74,
+            iconName: "pin.fill",
+            title: "剪贴板贴图",
+            type: .pinClipboard
+        )
+        pinBadge = row2Badge
+        pinResetBtn = row2Reset
+
+        // MARK: - 卡片 2：菜单栏指标显示板块
+        let card2 = createCardView(frame: NSRect(x: 20, y: 130, width: contentW - 40, height: 104))
+        cardsContainer.addSubview(card2)
+
+        let metricHeader = createSectionHeader(icon: "menubar.rectangle", title: "菜单栏指标显示")
+        metricHeader.frame = NSRect(x: 14, y: 12, width: 200, height: 18)
+        card2.addSubview(metricHeader)
+
+        let showAllBtn = NSButton(title: "显示全部", target: self, action: #selector(showAllMetricsClicked))
+        showAllBtn.bezelStyle = .inline
+        showAllBtn.font = .systemFont(ofSize: 10.5, weight: .medium)
+        showAllBtn.frame = NSRect(x: contentW - 40 - 78, y: 10, width: 66, height: 20)
+        card2.addSubview(showAllBtn)
+
+        let cbGrid = [Metric.cpu, Metric.memory, Metric.gpu, Metric.network]
+        let colWidth: CGFloat = 88
+        for (i, metric) in cbGrid.enumerated() {
+            let x = 16 + CGFloat(i) * colWidth
+            let cb = NSButton(checkboxWithTitle: metric.title, target: self, action: #selector(metricCheckboxToggled(_:)))
+            cb.font = .systemFont(ofSize: 12, weight: .regular)
+            cb.frame = NSRect(x: x, y: 44, width: colWidth, height: 22)
+            card2.addSubview(cb)
+            metricCheckboxes[metric] = cb
         }
-        card1.addSubview(autoStartIcon)
 
-        let autoStartTitle = NSTextField(labelWithString: "开机自启动")
-        autoStartTitle.frame = NSRect(x: 48, y: 40, width: 180, height: 18)
-        autoStartTitle.font = .systemFont(ofSize: 13, weight: .semibold)
-        autoStartTitle.textColor = .labelColor
-        card1.addSubview(autoStartTitle)
+        let metricHint = NSTextField(labelWithString: "至少保留一项监控指标在菜单栏中展示 · 实时生效")
+        metricHint.frame = NSRect(x: 16, y: 74, width: 340, height: 16)
+        metricHint.font = .systemFont(ofSize: 10, weight: .regular)
+        metricHint.textColor = .tertiaryLabelColor
+        card2.addSubview(metricHint)
 
-        let autoStartDesc = NSTextField(labelWithString: "登录 macOS 系统后自动在后台运行 Qstats")
-        autoStartDesc.frame = NSRect(x: 48, y: 22, width: 210, height: 16)
-        autoStartDesc.font = .systemFont(ofSize: 10.5, weight: .regular)
-        autoStartDesc.textColor = .secondaryLabelColor
-        card1.addSubview(autoStartDesc)
+        // MARK: - 卡片 3：显示样式板块
+        let card3 = createCardView(frame: NSRect(x: 20, y: 242, width: contentW - 40, height: 136))
+        cardsContainer.addSubview(card3)
+
+        let styleHeader = createSectionHeader(icon: "slider.horizontal.3", title: "监控显示样式")
+        styleHeader.frame = NSRect(x: 14, y: 12, width: 200, height: 18)
+        card3.addSubview(styleHeader)
+
+        let styleMetrics = [Metric.cpu, Metric.memory, Metric.gpu]
+        for (idx, metric) in styleMetrics.enumerated() {
+            let y = 38 + CGFloat(idx) * 30
+            let label = NSTextField(labelWithString: "\(metric.title) 样式")
+            label.frame = NSRect(x: 16, y: y + 2, width: 80, height: 20)
+            label.font = .systemFont(ofSize: 12, weight: .medium)
+            label.textColor = .labelColor
+            card3.addSubview(label)
+
+            let popup = NSPopUpButton(frame: NSRect(x: 100, y: y, width: 140, height: 24), pullsDown: false)
+            popup.bezelStyle = .rounded
+            popup.font = .systemFont(ofSize: 11, weight: .regular)
+            for opt in styleOptions {
+                popup.addItem(withTitle: opt.title)
+            }
+            popup.target = self
+            popup.action = #selector(stylePopupChanged(_:))
+            card3.addSubview(popup)
+            stylePopups[metric] = popup
+        }
+
+        // MARK: - 卡片 4：系统自启与屏幕录制权限
+        let card4 = createCardView(frame: NSRect(x: 20, y: 386, width: contentW - 40, height: 136))
+        cardsContainer.addSubview(card4)
+
+        let permHeader = createSectionHeader(icon: "shield.lefthalf.filled", title: "系统偏好与核心授权")
+        permHeader.frame = NSRect(x: 14, y: 12, width: 220, height: 18)
+        card4.addSubview(permHeader)
+
+        // 自启行
+        let autoStartLabel = NSTextField(labelWithString: "开机自启动")
+        autoStartLabel.frame = NSRect(x: 16, y: 40, width: 100, height: 18)
+        autoStartLabel.font = .systemFont(ofSize: 12.5, weight: .semibold)
+        card4.addSubview(autoStartLabel)
 
         autoStartStatusLabel = NSTextField(labelWithString: "未启用")
-        autoStartStatusLabel.frame = NSRect(x: 48, y: 7, width: 210, height: 14)
-        autoStartStatusLabel.font = .systemFont(ofSize: 9.5, weight: .medium)
-        autoStartStatusLabel.textColor = .tertiaryLabelColor
-        card1.addSubview(autoStartStatusLabel)
+        autoStartStatusLabel.frame = NSRect(x: 16, y: 60, width: 260, height: 14)
+        autoStartStatusLabel.font = .systemFont(ofSize: 10, weight: .regular)
+        autoStartStatusLabel.textColor = .secondaryLabelColor
+        card4.addSubview(autoStartStatusLabel)
 
-        autoStartSwitch = NSSwitch(frame: NSRect(x: contentW - 40 - 54, y: 24, width: 44, height: 24))
+        autoStartSwitch = NSSwitch(frame: NSRect(x: contentW - 40 - 54, y: 42, width: 44, height: 24))
         autoStartSwitch.target = self
         autoStartSwitch.action = #selector(autoStartSwitchChanged(_:))
-        card1.addSubview(autoStartSwitch)
+        card4.addSubview(autoStartSwitch)
 
-        // 4. 卡片 2：屏幕录制权限卡片
-        let card2 = createCardView(frame: NSRect(x: 20, y: 52, width: contentW - 40, height: 72))
-        container.addSubview(card2)
-
-        let screenIcon = NSImageView(frame: NSRect(x: 14, y: 24, width: 24, height: 24))
-        if let icon = NSImage(systemSymbolName: "record.circle.fill", accessibilityDescription: "屏幕录制") {
-            let conf = NSImage.SymbolConfiguration(pointSize: 20, weight: .medium)
-            screenIcon.image = icon.withSymbolConfiguration(conf)
-            screenIcon.contentTintColor = .systemOrange
-        }
-        card2.addSubview(screenIcon)
-
-        let screenTitle = NSTextField(labelWithString: "屏幕录制权限")
-        screenTitle.frame = NSRect(x: 48, y: 40, width: 120, height: 18)
-        screenTitle.font = .systemFont(ofSize: 13, weight: .semibold)
-        screenTitle.textColor = .labelColor
-        card2.addSubview(screenTitle)
+        // 录制权限行
+        let screenLabel = NSTextField(labelWithString: "屏幕录制权限")
+        screenLabel.frame = NSRect(x: 16, y: 86, width: 100, height: 18)
+        screenLabel.font = .systemFont(ofSize: 12.5, weight: .semibold)
+        card4.addSubview(screenLabel)
 
         screenRecordStatusBadge = NSTextField(labelWithString: "检查中")
-        screenRecordStatusBadge.frame = NSRect(x: 168, y: 41, width: 90, height: 16)
+        screenRecordStatusBadge.frame = NSRect(x: 118, y: 87, width: 80, height: 16)
         screenRecordStatusBadge.font = .monospacedSystemFont(ofSize: 10, weight: .bold)
-        card2.addSubview(screenRecordStatusBadge)
+        card4.addSubview(screenRecordStatusBadge)
 
-        let screenDesc = NSTextField(labelWithString: "用于区域截图、取色与全屏画布（系统隐私要求）")
-        screenDesc.frame = NSRect(x: 48, y: 15, width: 220, height: 24)
-        screenDesc.font = .systemFont(ofSize: 10.5, weight: .regular)
+        let screenDesc = NSTextField(labelWithString: "用于区域截图、取色与全屏画布（系统隐私保护）")
+        screenDesc.frame = NSRect(x: 16, y: 106, width: 280, height: 14)
+        screenDesc.font = .systemFont(ofSize: 10, weight: .regular)
         screenDesc.textColor = .secondaryLabelColor
-        card2.addSubview(screenDesc)
+        card4.addSubview(screenDesc)
 
-        screenRecordSwitch = NSSwitch(frame: NSRect(x: contentW - 40 - 54, y: 24, width: 44, height: 24))
+        screenRecordSwitch = NSSwitch(frame: NSRect(x: contentW - 40 - 54, y: 88, width: 44, height: 24))
         screenRecordSwitch.target = self
         screenRecordSwitch.action = #selector(screenRecordSwitchChanged(_:))
-        card2.addSubview(screenRecordSwitch)
+        card4.addSubview(screenRecordSwitch)
 
-        // 5. 底部操作栏按钮组
+        // 3. 底部固定操作栏
         let sysPrefBtn = NSButton(title: "系统设置…", target: self, action: #selector(openSystemSettings))
-        sysPrefBtn.frame = NSRect(x: 20, y: 14, width: 88, height: 26)
+        sysPrefBtn.frame = NSRect(x: 20, y: 12, width: 88, height: 26)
         sysPrefBtn.bezelStyle = .regularSquare
         sysPrefBtn.isBordered = false
         sysPrefBtn.wantsLayer = true
@@ -171,10 +291,10 @@ final class SettingsWindowController: NSWindowController {
                 ? NSColor.white.withAlphaComponent(0.06)
                 : NSColor.black.withAlphaComponent(0.04)
         }.cgColor
-        container.addSubview(sysPrefBtn)
+        rootContainer.addSubview(sysPrefBtn)
 
         let relaunchBtn = NSButton(title: "重启应用", target: self, action: #selector(relaunchApp))
-        relaunchBtn.frame = NSRect(x: 114, y: 14, width: 78, height: 26)
+        relaunchBtn.frame = NSRect(x: 114, y: 12, width: 78, height: 26)
         relaunchBtn.bezelStyle = .regularSquare
         relaunchBtn.isBordered = false
         relaunchBtn.wantsLayer = true
@@ -191,10 +311,10 @@ final class SettingsWindowController: NSWindowController {
                 ? NSColor.white.withAlphaComponent(0.06)
                 : NSColor.black.withAlphaComponent(0.04)
         }.cgColor
-        container.addSubview(relaunchBtn)
+        rootContainer.addSubview(relaunchBtn)
 
         let doneBtn = NSButton(title: "完成", target: self, action: #selector(closeSettings))
-        doneBtn.frame = NSRect(x: contentW - 20 - 74, y: 14, width: 74, height: 26)
+        doneBtn.frame = NSRect(x: contentW - 20 - 74, y: 12, width: 74, height: 26)
         doneBtn.bezelStyle = .regularSquare
         doneBtn.isBordered = false
         doneBtn.wantsLayer = true
@@ -209,7 +329,74 @@ final class SettingsWindowController: NSWindowController {
         }
         doneBtn.layer?.backgroundColor = btnBg.cgColor
         doneBtn.contentTintColor = .black
-        container.addSubview(doneBtn)
+        rootContainer.addSubview(doneBtn)
+    }
+
+    // 辅助方法：构建快捷键行
+    private func buildShortcutRow(
+        in card: NSView,
+        y: CGFloat,
+        iconName: String,
+        title: String,
+        type: ShortcutType
+    ) -> (NSTextField, NSButton) {
+        let iconView = NSImageView(frame: NSRect(x: 16, y: y + 2, width: 16, height: 16))
+        if let img = NSImage(systemSymbolName: iconName, accessibilityDescription: title) {
+            let conf = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+            iconView.image = img.withSymbolConfiguration(conf)
+            iconView.contentTintColor = .secondaryLabelColor
+        }
+        card.addSubview(iconView)
+
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.frame = NSRect(x: 38, y: y + 1, width: 100, height: 18)
+        titleLabel.font = .systemFont(ofSize: 12.5, weight: .medium)
+        titleLabel.textColor = .labelColor
+        card.addSubview(titleLabel)
+
+        let badge = NSTextField(labelWithString: "—")
+        badge.frame = NSRect(x: 146, y: y, width: 76, height: 20)
+        badge.font = .monospacedSystemFont(ofSize: 12, weight: .bold)
+        badge.alignment = .center
+        badge.textColor = .systemTeal
+        badge.wantsLayer = true
+        badge.layer?.cornerRadius = 5
+        badge.layer?.borderWidth = 1
+        badge.layer?.borderColor = NSColor.systemTeal.withAlphaComponent(0.35).cgColor
+        badge.layer?.backgroundColor = NSColor.systemTeal.withAlphaComponent(0.08).cgColor
+        card.addSubview(badge)
+
+        let editBtn = NSButton(title: "设置…", target: self, action: type == .screenshot ? #selector(customizeScreenshotClicked) : #selector(customizePinClicked))
+        editBtn.bezelStyle = .rounded
+        editBtn.font = .systemFont(ofSize: 11, weight: .medium)
+        editBtn.frame = NSRect(x: 230, y: y - 2, width: 68, height: 24)
+        card.addSubview(editBtn)
+
+        let resetBtn = NSButton(title: "恢复默认", target: self, action: type == .screenshot ? #selector(resetScreenshotClicked) : #selector(resetPinClicked))
+        resetBtn.bezelStyle = .rounded
+        resetBtn.font = .systemFont(ofSize: 11, weight: .regular)
+        resetBtn.frame = NSRect(x: 302, y: y - 2, width: 76, height: 24)
+        card.addSubview(resetBtn)
+
+        return (badge, resetBtn)
+    }
+
+    private func createSectionHeader(icon: String, title: String) -> NSView {
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 18))
+        let imgView = NSImageView(frame: NSRect(x: 0, y: 1, width: 16, height: 16))
+        if let img = NSImage(systemSymbolName: icon, accessibilityDescription: title) {
+            let conf = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+            imgView.image = img.withSymbolConfiguration(conf)
+            imgView.contentTintColor = .systemTeal
+        }
+        view.addSubview(imgView)
+
+        let label = NSTextField(labelWithString: title)
+        label.frame = NSRect(x: 20, y: 0, width: 190, height: 18)
+        label.font = .systemFont(ofSize: 12, weight: .bold)
+        label.textColor = .labelColor
+        view.addSubview(label)
+        return view
     }
 
     private func createCardView(frame: NSRect) -> NSView {
@@ -231,7 +418,6 @@ final class SettingsWindowController: NSWindowController {
     }
 
     private func registerObservers() {
-        // 当用户切换应用（例如从 macOS 系统设置授权后切回 Qstats）时，自动刷新权限开关与状态
         activeObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
@@ -241,7 +427,10 @@ final class SettingsWindowController: NSWindowController {
         }
     }
 
-    func show() {
+    func show(with config: AppConfig? = nil) {
+        if let config { self.currentConfig = config }
+        else { self.currentConfig = AppConfig.load() }
+
         guard let window = window else { return }
         refreshStatus()
         NSApplication.shared.activate(ignoringOtherApps: true)
@@ -249,14 +438,36 @@ final class SettingsWindowController: NSWindowController {
         window.makeKeyAndOrderFront(nil)
     }
 
-    /// 刷新所有开关与状态展示
+    /// 刷新所有开关、指标勾选、样式及快捷键状态
     func refreshStatus() {
-        // 1. 开机自启动状态
+        // 1. 刷新快捷键展示
+        let shotShortcut = ShortcutPreferences.loadScreenshot()
+        screenshotBadge.stringValue = shotShortcut.displayName
+        screenshotResetBtn.isEnabled = (shotShortcut != .defaultScreenshot)
+
+        let pinShortcut = ShortcutPreferences.loadPinClipboard()
+        pinBadge.stringValue = pinShortcut.displayName
+        pinResetBtn.isEnabled = (pinShortcut != .defaultPinClipboard)
+
+        // 2. 刷新菜单栏指标勾选
+        for (metric, cb) in metricCheckboxes {
+            cb.state = currentConfig.isVisible(metric) ? .on : .off
+        }
+
+        // 3. 刷新监控显示样式
+        for (metric, popup) in stylePopups {
+            let curStyle = currentConfig.style(for: metric)
+            if let idx = styleOptions.firstIndex(where: { $0.key == curStyle }) {
+                popup.selectItem(at: idx)
+            }
+        }
+
+        // 4. 开机自启动状态
         let isAutoStart = LaunchAtLoginManager.shared.isEnabled
         autoStartSwitch.state = isAutoStart ? .on : .off
         autoStartStatusLabel.stringValue = "系统状态：\(LaunchAtLoginManager.shared.statusDescription)"
 
-        // 2. 屏幕录制权限状态
+        // 5. 屏幕录制权限状态
         let hasScreenCapture = CGPreflightScreenCaptureAccess()
         screenRecordSwitch.state = hasScreenCapture ? .on : .off
         if hasScreenCapture {
@@ -268,7 +479,145 @@ final class SettingsWindowController: NSWindowController {
         }
     }
 
-    // MARK: - 控件事件交互
+    // MARK: - 快捷键交互
+
+    @objc private func customizeScreenshotClicked() {
+        customizeShortcut(for: .screenshot)
+    }
+
+    @objc private func customizePinClicked() {
+        customizeShortcut(for: .pinClipboard)
+    }
+
+    @objc private func resetScreenshotClicked() {
+        applyShortcut(.defaultScreenshot, for: .screenshot)
+    }
+
+    @objc private func resetPinClicked() {
+        applyShortcut(.defaultPinClipboard, for: .pinClipboard)
+    }
+
+    private func customizeShortcut(for type: ShortcutType) {
+        let current = type == .screenshot ? ShortcutPreferences.loadScreenshot() : ShortcutPreferences.loadPinClipboard()
+        let title = type == .screenshot ? "设置区域截图快捷键" : "设置剪贴板贴图快捷键"
+
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = "按下新的组合键，需包含修饰键（⌃、⌥、⇧ 或 ⌘）。"
+        let recorder = ShortcutRecorderView(shortcut: current)
+        alert.accessoryView = recorder
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "取消")
+
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.window === alert.window else { return event }
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if modifiers.isEmpty && [UInt16(53), UInt16(36), UInt16(48)].contains(event.keyCode) {
+                return event
+            }
+            guard let shortcut = KeyboardShortcut(event: event) else {
+                recorder.rejectInput()
+                return nil
+            }
+            recorder.shortcut = shortcut
+            return nil
+        }
+        defer { if let monitor { NSEvent.removeMonitor(monitor) } }
+
+        guard alert.runModal() == .alertFirstButtonReturn, let newShortcut = recorder.shortcut else { return }
+        applyShortcut(newShortcut, for: type)
+    }
+
+    private func applyShortcut(_ shortcut: KeyboardShortcut, for type: ShortcutType) {
+        switch type {
+        case .screenshot:
+            let prev = ShortcutPreferences.loadScreenshot()
+            if GlobalHotKeyManager.shared.registerScreenshotShortcut(shortcut) {
+                ShortcutPreferences.saveScreenshot(shortcut)
+            } else {
+                _ = GlobalHotKeyManager.shared.registerScreenshotShortcut(prev)
+                showShortcutUnavailable(shortcut)
+            }
+        case .pinClipboard:
+            let prev = ShortcutPreferences.loadPinClipboard()
+            if GlobalHotKeyManager.shared.registerPinClipboardShortcut(shortcut) {
+                ShortcutPreferences.savePinClipboard(shortcut)
+            } else {
+                _ = GlobalHotKeyManager.shared.registerPinClipboardShortcut(prev)
+                showShortcutUnavailable(shortcut)
+            }
+        }
+        refreshStatus()
+        onShortcutChanged?()
+    }
+
+    private func showShortcutUnavailable(_ shortcut: KeyboardShortcut) {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "快捷键 \(shortcut.displayName) 不可用"
+        alert.informativeText = "该组合键可能已被系统或其他应用占用，原快捷键保持不变。"
+        alert.addButton(withTitle: "好")
+        alert.runModal()
+    }
+
+    // MARK: - 菜单栏显示与样式联动
+
+    @objc private func metricCheckboxToggled(_ sender: NSButton) {
+        // 根据发送者实例匹配对应的 Metric
+        guard let (metric, _) = metricCheckboxes.first(where: { $0.value === sender }) else { return }
+        var candidate = currentConfig
+
+        if sender.state == .off && candidate.visibleMetricCount <= 1 {
+            // 至少保留一项，阻止取消
+            sender.state = .on
+            NSSound.beep()
+            return
+        }
+
+        if candidate.toggle(metric) {
+            saveAndApply(candidate)
+        }
+    }
+
+    @objc private func showAllMetricsClicked() {
+        var candidate = currentConfig
+        candidate.showCPU = true
+        candidate.showMemory = true
+        candidate.showGPU = true
+        candidate.showNetwork = true
+        saveAndApply(candidate)
+    }
+
+    @objc private func stylePopupChanged(_ sender: NSPopUpButton) {
+        // 根据发送者实例匹配对应的 Metric
+        guard let (metric, _) = stylePopups.first(where: { $0.value === sender }) else { return }
+        let selectedIdx = sender.indexOfSelectedItem
+        guard selectedIdx >= 0 && selectedIdx < styleOptions.count else { return }
+        let newStyle = styleOptions[selectedIdx].key
+
+        var candidate = currentConfig
+        candidate.setStyle(newStyle, for: metric)
+        saveAndApply(candidate)
+    }
+
+    private func saveAndApply(_ config: AppConfig) {
+        do {
+            try config.saveDisplayPreferences()
+            currentConfig = config
+            refreshStatus()
+            onConfigChanged?(config)
+        } catch {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "无法保存显示设置"
+            alert.informativeText = "请检查配置文件的写入权限。\n\(error.localizedDescription)"
+            alert.runModal()
+        }
+    }
+
+    // MARK: - 自启与屏幕录制权限事件
 
     @objc private func autoStartSwitchChanged(_ sender: NSSwitch) {
         let targetState = (sender.state == .on)
@@ -276,7 +625,6 @@ final class SettingsWindowController: NSWindowController {
             try LaunchAtLoginManager.shared.setEnabled(targetState)
             refreshStatus()
         } catch {
-            // 异常回滚 Switch 状态并提示用户
             sender.state = targetState ? .off : .on
             refreshStatus()
 
@@ -299,7 +647,6 @@ final class SettingsWindowController: NSWindowController {
                 refreshStatus()
                 return
             }
-            // 触发系统权限弹窗并打开系统设置
             CGRequestScreenCaptureAccess()
             ScreenCaptureService.openSystemSettings()
 
@@ -314,7 +661,6 @@ final class SettingsWindowController: NSWindowController {
                 ScreenCaptureService.relaunchApp()
             }
         } else {
-            // macOS 隐私限制：第三方程序无法直接代码撤销 TCC 权限
             NSApplication.shared.activate(ignoringOtherApps: true)
             let alert = NSAlert()
             alert.alertStyle = .warning
@@ -326,7 +672,6 @@ final class SettingsWindowController: NSWindowController {
                 ScreenCaptureService.openSystemSettings()
             }
         }
-        // 保持 switch 与实际权限同步
         refreshStatus()
     }
 
@@ -341,4 +686,9 @@ final class SettingsWindowController: NSWindowController {
     @objc private func closeSettings() {
         window?.close()
     }
+}
+
+/// 顶部对齐翻转坐标系视图（保证卡片从上往下自顶向下顺序排列）
+final class NSFlippedView: NSView {
+    override var isFlipped: Bool { true }
 }
