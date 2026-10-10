@@ -75,4 +75,23 @@ final class ScreenCaptureService {
         }
         return true
     }
+
+    /// 打开 macOS 屏幕录制隐私系统设置面板
+    static func openSystemSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// 重启应用以使 macOS TCC 权限变更生效
+    static func relaunchApp() {
+        let bundleURL = Bundle.main.bundleURL
+        let config = NSWorkspace.OpenConfiguration()
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in
+            DispatchQueue.main.async {
+                NSApplication.shared.terminate(nil)
+            }
+        }
+    }
 }
+

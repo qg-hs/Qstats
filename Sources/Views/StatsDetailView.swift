@@ -31,30 +31,7 @@ final class StatsMenuBuilder {
         downItem = nil
         upItem = nil
 
-        // 顶部品牌标题（紧凑布局）
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.0"
-        let headerItem = NSMenuItem(title: "Qstats", action: nil, keyEquivalent: "")
-        headerItem.isEnabled = false
-
-        let headerStr = NSMutableAttributedString()
-        headerStr.append(NSAttributedString(
-            string: "Qstats",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 13, weight: .bold),
-                .foregroundColor: NSColor.labelColor,
-            ]
-        ))
-        headerStr.append(NSAttributedString(
-            string: "  v\(version)",
-            attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
-                .foregroundColor: NSColor.tertiaryLabelColor,
-            ]
-        ))
-        headerItem.attributedTitle = headerStr
-        menu.addItem(headerItem)
-        menu.addItem(NSMenuItem.separator())
-
+        // 关键改动：移除原顶部 Qstats 版本行与分隔线，直接从监控项开始排列
         if config.showCPU {
             cpuItem = makeRow(icon: "cpu", label: cpuLabel, value: "—")
             menu.addItem(cpuItem!)

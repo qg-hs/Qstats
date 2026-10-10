@@ -128,10 +128,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         checkUpdateItem.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: "检查更新")
         menu.addItem(checkUpdateItem)
 
-        let aboutItem = NSMenuItem(title: "关于 Qstats", action: #selector(showAbout), keyEquivalent: "")
+        let aboutItem = NSMenuItem(title: "关于", action: #selector(showAbout), keyEquivalent: "")
         aboutItem.target = self
         aboutItem.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "关于")
         menu.addItem(aboutItem)
+
+        // MARK: - 系统偏好与权限设置（自启与屏幕录制滑块开关）
+        let settingsItem = NSMenuItem(title: "设置…", action: #selector(showSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "设置")
+        menu.addItem(settingsItem)
         menu.addItem(.separator())
 
         // MARK: - 退出应用
@@ -290,6 +296,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - 关键改动 2：采用专属毛玻璃现代化"关于"独立面板
     @objc private func showAbout() {
         AboutWindowController.shared.show()
+    }
+
+    // MARK: - 偏好设置面板（自启与屏幕录制权限开关）
+    @objc private func showSettings() {
+        SettingsWindowController.shared.show()
     }
 
     // MARK: - 对接 GitHub 最新仓库版本更新检测（带 API 频控降级 Fallback 容灾）

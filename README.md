@@ -2,7 +2,7 @@
 <h1 align="center">Qstats</h1>
 <p align="center">轻量、免费、无需账号的 macOS 系统监控与截图工具。</p>
 
-![Version](https://img.shields.io/badge/version-1.5.0-teal)
+![Version](https://img.shields.io/badge/version-1.6.0-teal)
 ![macOS](https://img.shields.io/badge/macOS-13%2B-blue)
 ![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange)
 [![Build macOS apps](https://github.com/qg-hs/Qstats/actions/workflows/macos.yml/badge.svg)](https://github.com/qg-hs/Qstats/actions/workflows/macos.yml)
@@ -26,7 +26,11 @@
 - 可将剪贴板图片贴到桌面；贴图支持拖动、4角拉动等比缩放、触摸板双指捏合缩放、滚轮缩放和 `Option + 滚轮`调透明度。
 - 所有图片仅在本机处理，不上传，不需要账号。
 
-首次截图时，macOS 会要求「屏幕与系统音频录制」权限。授权后重新启动 Qstats。平时的系统监控不会读取屏幕。
+### 偏好设置与系统自启
+
+- 支持原生「开机自启动」一键开关（基于 macOS 13+ `SMAppService` 原生服务）。
+- 提供可视化「屏幕录制权限」授权感知与一键跳转系统设置引导。
+- 现代化毛玻璃 HUD 独立设置面板，快捷键 `⌘,` 快速调出。
 
 ## 下载与安装
 
@@ -52,8 +56,8 @@ brew install --cask qstats
 
 | 芯片架构 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4） | `Qstats-1.5.0-apple-silicon.dmg` |
-| Intel 处理器 | `Qstats-1.5.0-intel.dmg` |
+| Apple Silicon（M1 / M2 / M3 / M4） | `Qstats-1.6.0-apple-silicon.dmg` |
+| Intel 处理器 | `Qstats-1.6.0-intel.dmg` |
 
 打开 DMG，将 **Qstats.app** 拖拽至 `Applications`（应用程序）目录。
 
