@@ -118,5 +118,31 @@ final class NetworkMonitorTests: XCTestCase {
         XCTAssertLessThan(smallWidth, largeWidth)
         XCTAssertGreaterThan(smallWidth, 20)
     }
+
+    func testFormatBoundaryPrecision() {
+        // 1. 验证临界值不发生 1024 KB/s 突变，且绝无小数尾巴
+        let kb999 = NetworkThroughput.format(bytesPerSec: 999 * 1024)
+        XCTAssertEqual(kb999, "999 KB/s")
+
+        let kb1023 = NetworkThroughput.format(bytesPerSec: 1023 * 1024)
+        XCTAssertEqual(kb1023, "1023 KB/s")
+
+        // 1023.6 KB 平滑进入 1.0 MB/s，而非 1024 KB/s
+        let kb1023_6 = NetworkThroughput.format(bytesPerSec: 1_048_166)
+        XCTAssertEqual(kb1023_6, "1.0 MB/s")
+
+        // 2. 验证高位小数四舍五入后严格锁定 1 位小数，绝不产生类似 999.999999999 精度丢失
+        let near1000MB = NetworkThroughput.format(bytesPerSec: UInt64(999.99 * 1024 * 1024))
+        XCTAssertEqual(near1000MB, "1000.0 MB/s")
+        XCTAssertFalse(near1000MB.contains("999.99"))
+
+        // 3. 验证字符串不含有多于 1 位的小数位
+        let sample = NetworkThroughput.format(bytesPerSec: 12345678)
+        if let dotIndex = sample.firstIndex(of: ".") {
+            let afterDot = sample[sample.index(after: dotIndex)...]
+            let decimalDigits = afterDot.prefix(while: { $0.isNumber })
+            XCTAssertLessThanOrEqual(decimalDigits.count, 1)
+        }
+    }
 }
 

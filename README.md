@@ -2,7 +2,7 @@
 <h1 align="center">Qstats</h1>
 <p align="center">轻量、免费、无需账号的 macOS 系统监控与截图工具。</p>
 
-![Version](https://img.shields.io/badge/version-1.8.2-teal)
+![Version](https://img.shields.io/badge/version-1.8.3-teal)
 ![macOS](https://img.shields.io/badge/macOS-13%2B-blue)
 ![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange)
 [![Build macOS apps](https://github.com/qg-hs/Qstats/actions/workflows/macos.yml/badge.svg)](https://github.com/qg-hs/Qstats/actions/workflows/macos.yml)
@@ -33,6 +33,7 @@
 - 全面纳管快捷键录制（截图与贴图）、菜单栏指标显示、显示样式与系统授权。
 - 提供可视化「屏幕录制权限」授权感知与一键跳转系统设置引导。
 - 现代化毛玻璃 HUD 独立设置面板，快捷键 `⌘,` 快速调出。
+- **内置原生自更新机制**：在「关于」面板一键检测、架构感知流式下载并秒级无缝重启热替换，无需前往网页手动下载。
 
 ## 下载与安装
 
@@ -58,8 +59,8 @@ brew install --cask qstats
 
 | 芯片架构 | 安装包 |
 | --- | --- |
-| Apple Silicon（M1 / M2 / M3 / M4） | `Qstats-1.8.2-apple-silicon.dmg` |
-| Intel 处理器 | `Qstats-1.8.2-intel.dmg` |
+| Apple Silicon（M1 / M2 / M3 / M4） | `Qstats-1.8.3-apple-silicon.dmg` |
+| Intel 处理器 | `Qstats-1.8.3-intel.dmg` |
 
 打开 DMG，将 **Qstats.app** 拖拽至 `Applications`（应用程序）目录。
 

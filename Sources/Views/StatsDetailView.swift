@@ -167,13 +167,13 @@ final class StatsMenuBuilder {
         var str = text
         // 若超出目标长度（例如 1023.9 MB/s 占 11 字符），通过去除小数点后一位紧凑化为 1023 MB/s
         if str.count > targetLength && str.contains(".") {
-            if let dotIdx = str.firstIndex(of: "."), let spaceIdx = str.firstIndex(of: " ") {
+            if let dotIdx = str.firstIndex(of: "."), let spaceIdx = str.firstIndex(of: " "), dotIdx < spaceIdx {
                 str.removeSubrange(dotIdx..<spaceIdx)
             }
         }
         let count = str.count
         if count >= targetLength {
-            return String(str.prefix(targetLength))
+            return str
         }
         return String(repeating: " ", count: targetLength - count) + str
     }
