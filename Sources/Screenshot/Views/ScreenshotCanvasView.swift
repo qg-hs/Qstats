@@ -122,9 +122,6 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         addSubview(overlay)
         addSubview(magnifier)
 
-        // 预热马赛克滤镜缓存
-        warmupMosaicCache(scale: currentMosaicScale)
-
         // 监听系统调色板实时选色通知
         NotificationCenter.default.addObserver(
             self,
@@ -217,7 +214,9 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: selection).addClip()
         if let context = NSGraphicsContext.current?.cgContext {
-            let mosaic = getOrGenerateMosaicCache(for: currentMosaicScale)
+            // 关键优化：按需惰性生成马赛克缓存（Lazy Evaluation），仅在存在马赛克标注或正在绘制时计算
+            let hasMosaic = annotations.contains(where: { $0.isMosaic }) || (workingAnnotation?.isMosaic ?? false)
+            let mosaic = hasMosaic ? getOrGenerateMosaicCache(for: currentMosaicScale) : nil
             for annotation in annotations {
                 annotation.draw(in: context, background: screenshot, canvasBounds: bounds, mosaicCache: mosaic)
             }
@@ -822,8 +821,24 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
 
     // MARK: - 马赛克高速缓存体系
 
+    // 关键优化：异步后台预热马赛克滤镜缓存，彻底消除主线程阻塞
     private func warmupMosaicCache(scale: CGFloat) {
-        _ = getOrGenerateMosaicCache(for: scale)
+        if cachedMosaicCGImage != nil && cachedMosaicScale == scale { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            guard let cgImage = self.screenshot.cgImage(forProposedRect: nil, context: nil, hints: nil),
+                  let filter = CIFilter(name: "CIPixellate") else { return }
+            let input = CIImage(cgImage: cgImage)
+            let pointScale = CGFloat(cgImage.width) / max(1, self.bounds.width)
+            filter.setValue(input, forKey: kCIInputImageKey)
+            filter.setValue(max(4, scale * pointScale), forKey: kCIInputScaleKey)
+            guard let output = filter.outputImage,
+                  let rendered = Annotation.sharedCIContext.createCGImage(output, from: input.extent) else { return }
+            DispatchQueue.main.async {
+                self.cachedMosaicCGImage = rendered
+                self.cachedMosaicScale = scale
+            }
+        }
     }
 
     private func getOrGenerateMosaicCache(for scale: CGFloat) -> CGImage? {
@@ -979,7 +994,9 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         screenshot.draw(in: bounds, from: .zero, operation: .copy, fraction: 1,
                         respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
         let context = graphics.cgContext
-        let mosaic = getOrGenerateMosaicCache(for: currentMosaicScale)
+        // 关键优化：按需生成马赛克缓存
+        let hasMosaic = annotations.contains(where: { $0.isMosaic })
+        let mosaic = hasMosaic ? getOrGenerateMosaicCache(for: currentMosaicScale) : nil
         for annotation in annotations {
             annotation.draw(in: context, background: screenshot, canvasBounds: bounds, mosaicCache: mosaic)
         }

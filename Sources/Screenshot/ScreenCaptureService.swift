@@ -37,13 +37,6 @@ final class ScreenCaptureService {
             throw ScreenCaptureError.unavailable
         }
 
-        // 2. 图像有效性安全防御：防止系统授权未重启过渡期返回全黑画面
-        for cap in captures {
-            if isImageEmptyOrBlack(cap.image) {
-                throw ScreenCaptureError.permissionDenied
-            }
-        }
-
         return captures
     }
 
@@ -56,24 +49,6 @@ final class ScreenCaptureService {
         let image = NSImage(cgImage: cgImage, size: screen.frame.size)
         let scale = CGFloat(cgImage.width) / max(1, screen.frame.width)
         return CapturedScreen(screen: screen, image: image, cgImage: cgImage, scale: scale)
-    }
-
-    /// 快速抽样校验图像是否全黑
-    private func isImageEmptyOrBlack(_ image: NSImage) -> Bool {
-        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
-              let rep = NSBitmapImageRep(cgImage: cgImage) as NSBitmapImageRep? else { return true }
-        let stepX = max(1, cgImage.width / 30)
-        let stepY = max(1, cgImage.height / 30)
-        for y in stride(from: 0, to: cgImage.height, by: stepY) {
-            for x in stride(from: 0, to: cgImage.width, by: stepX) {
-                if let color = rep.colorAt(x: x, y: y) {
-                    if color.redComponent > 0.04 || color.greenComponent > 0.04 || color.blueComponent > 0.04 {
-                        return false
-                    }
-                }
-            }
-        }
-        return true
     }
 
     /// 打开 macOS 屏幕录制隐私系统设置面板

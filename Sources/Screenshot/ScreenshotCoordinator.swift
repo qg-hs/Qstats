@@ -69,7 +69,7 @@ final class ScreenshotCoordinator: NSObject, ScreenshotCanvasDelegate {
             let canvas = ScreenshotCanvasView(capture: capture)
             canvas.delegate = self
             window.contentView = canvas
-            window.setFrame(capture.screen.frame, display: true)
+            window.setFrame(capture.screen.frame, display: false)
             window.orderFrontRegardless()
             return window
         }
