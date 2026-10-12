@@ -153,6 +153,40 @@ enum Annotation {
         if case let .mosaic(_, scale) = self { return scale }
         return nil
     }
+
+    // 关键改动：文字标注实体化属性与边界框计算
+    var isText: Bool {
+        if case .text = self { return true }
+        return false
+    }
+
+    var textOrigin: NSPoint? {
+        if case let .text(origin, _, _, _) = self { return origin }
+        return nil
+    }
+
+    var textValue: String? {
+        if case let .text(_, value, _, _) = self { return value }
+        return nil
+    }
+
+    var textColor: NSColor? {
+        if case let .text(_, _, color, _) = self { return color }
+        return nil
+    }
+
+    var textSize: CGFloat? {
+        if case let .text(_, _, _, size) = self { return size }
+        return nil
+    }
+
+    func textBoundingBox() -> NSRect? {
+        guard case let .text(origin, value, _, size) = self else { return nil }
+        let font = NSFont.systemFont(ofSize: size, weight: .semibold)
+        let s = (value as NSString).size(withAttributes: [.font: font])
+        // 增加 4pt padding 便于高精度点击和拖拽
+        return NSRect(x: origin.x - 3, y: origin.y - 2, width: s.width + 6, height: s.height + 4)
+    }
 }
 
 func normalizedRect(from start: NSPoint, to end: NSPoint) -> NSRect {

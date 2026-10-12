@@ -106,4 +106,17 @@ final class NetworkMonitorTests: XCTestCase {
             XCTAssertNotEqual(dhRGB, uhRGB)
         }
     }
+
+    func testNetworkWidgetDynamicContentWidth() {
+        let smallWidget = NetworkWidget(down: "7 KB/s", up: "31 KB/s")
+        let largeWidget = NetworkWidget(down: "1023 KB/s", up: "1023 KB/s")
+
+        let smallWidth = smallWidget.widthForHeight(22)
+        let largeWidth = largeWidget.widthForHeight(22)
+
+        // 验证小流量下的宽度自适应紧凑，不再占用固定 1023 KB/s 导致的巨幅空白
+        XCTAssertLessThan(smallWidth, largeWidth)
+        XCTAssertGreaterThan(smallWidth, 20)
+    }
 }
+

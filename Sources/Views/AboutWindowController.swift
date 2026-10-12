@@ -46,7 +46,7 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
         visualEffect.addSubview(container)
 
         let contentW: CGFloat = 280
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.8.0"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.8.2"
 
         // 2. 软件主图标（柔和环境光物理阴影 + 连续平滑圆角）
         let iconSize: CGFloat = 64
@@ -182,7 +182,7 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - 关键改动：将版本更新检测内置于“关于”控制器中（带 API 频控降级 Fallback 容灾）
     @objc func checkForUpdates() {
-        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.8.0"
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.8.2"
         let repoAPI = "https://api.github.com/repos/qg-hs/Qstats/releases/latest"
         let fallbackURL = "https://raw.githubusercontent.com/qg-hs/Qstats/main/VERSION"
         let releasesURL = URL(string: "https://github.com/qg-hs/Qstats/releases/latest")!

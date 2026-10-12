@@ -10,11 +10,9 @@ struct NetworkWidget: StatusBarWidget {
 
     private let font = NSFont.monospacedSystemFont(ofSize: 8, weight: .medium)
     private let arrowFont = NSFont.monospacedSystemFont(ofSize: 8, weight: .semibold)
-    private let dotGap: CGFloat = 3
+    private let dotGap: CGFloat = 1.0 // 关键优化：紧凑间距，箭头与数值不再被大间隙撕裂
     private let rowGap: CGFloat = 0
-    private let fixedWidth: CGFloat
-
-    private static let maxTemplate = "1023 KB/s"
+    private let contentWidth: CGFloat
 
     init(down: String, up: String, downBytes: UInt64 = 0, upBytes: UInt64 = 0) {
         self.downText = down
@@ -25,12 +23,18 @@ struct NetworkWidget: StatusBarWidget {
 
         let attrs: [NSAttributedString.Key: Any] = [.font: font]
         let arrowAttrsInit: [NSAttributedString.Key: Any] = [.font: arrowFont]
-        let arrowWidth = ceil(("↓" as NSString).size(withAttributes: arrowAttrsInit).width)
-        let textWidth = ceil((Self.maxTemplate as NSString).size(withAttributes: attrs).width)
-        self.fixedWidth = arrowWidth + 3 + textWidth // arrow + gap + text
+        let downArrowWidth = ceil(("↓" as NSString).size(withAttributes: arrowAttrsInit).width)
+        let upArrowWidth = ceil(("↑" as NSString).size(withAttributes: arrowAttrsInit).width)
+        let arrowWidth = max(downArrowWidth, upArrowWidth)
+
+        // 关键改动：宽度精准自适应当前文本内容，保证状态栏胶囊内左右 padding 严格对称，彻底消除右侧多余空白
+        let downTextWidth = ceil((down as NSString).size(withAttributes: attrs).width)
+        let upTextWidth = ceil((up as NSString).size(withAttributes: attrs).width)
+        let maxTextWidth = max(downTextWidth, upTextWidth)
+        self.contentWidth = arrowWidth + dotGap + maxTextWidth
     }
 
-    func widthForHeight(_ height: CGFloat) -> CGFloat { fixedWidth }
+    func widthForHeight(_ height: CGFloat) -> CGFloat { contentWidth }
 
     // MARK: - 下载色谱体系（冷萃科技系：天蓝 -> 科技蓝 -> 极速青绿）
 
@@ -114,7 +118,9 @@ struct NetworkWidget: StatusBarWidget {
         let topY = origin.y + (height + totalHeight) / 2 - textHeight   // top row baseline
         let botY = topY - textHeight - rowGap                             // bottom row baseline
 
-        let arrowWidth = ceil(("↓" as NSString).size(withAttributes: [.font: arrowFont]).width)
+        let downArrowWidth = ceil(("↓" as NSString).size(withAttributes: [.font: arrowFont]).width)
+        let upArrowWidth = ceil(("↑" as NSString).size(withAttributes: [.font: arrowFont]).width)
+        let arrowWidth = max(downArrowWidth, upArrowWidth)
         let textX = origin.x + arrowWidth + dotGap
 
         // 关键改动：Down row 使用独立的冷翠色谱体系（天蓝 -> 科技蓝 -> 极速青绿）
@@ -127,10 +133,9 @@ struct NetworkWidget: StatusBarWidget {
             .font: font,
             .foregroundColor: downColor,
         ]
-        let downWidth = ceil((downText as NSString).size(withAttributes: downAttrs).width)
         ("↓" as NSString).draw(at: NSPoint(x: origin.x, y: topY), withAttributes: downArrowAttrs)
-        (downText as NSString).draw(at: NSPoint(x: textX + (fixedWidth - arrowWidth - dotGap - downWidth), y: topY),
-                                    withAttributes: downAttrs)
+        // 关键改动：文字直接紧靠箭头右侧排版，彻底消除右对齐在小流量时拉出的巨大空当
+        (downText as NSString).draw(at: NSPoint(x: textX, y: topY), withAttributes: downAttrs)
 
         // 关键改动：Up row 使用独立的暖阳色谱体系（暖黄 -> 活力橙 -> 高能玫瑰粉），与下载形成鲜明区分
         let upColor = Self.uploadColor(forBytesPerSec: upBytes)
@@ -142,9 +147,8 @@ struct NetworkWidget: StatusBarWidget {
             .font: font,
             .foregroundColor: upColor,
         ]
-        let upWidth = ceil((upText as NSString).size(withAttributes: upAttrs).width)
         ("↑" as NSString).draw(at: NSPoint(x: origin.x, y: botY), withAttributes: upArrowAttrs)
-        (upText as NSString).draw(at: NSPoint(x: textX + (fixedWidth - arrowWidth - dotGap - upWidth), y: botY),
-                                   withAttributes: upAttrs)
+        // 关键改动：文字直接紧靠箭头右侧排版，紧凑稳健
+        (upText as NSString).draw(at: NSPoint(x: textX, y: botY), withAttributes: upAttrs)
     }
 }

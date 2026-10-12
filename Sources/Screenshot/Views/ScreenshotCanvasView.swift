@@ -79,6 +79,14 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
     private var mosaicDragStartMouse: NSPoint = .zero
     private var mosaicDragInitialRect: NSRect = .zero
 
+    // 关键改动：文字实体交互编辑状态（选中高亮、平移拖动、二次编辑、独立删除）
+    private var selectedTextIndex: Int?
+    private var isDraggingText: Bool = false
+    private var textDragStartMouse: NSPoint = .zero
+    private var textDragInitialOrigin: NSPoint = .zero
+    private var editingTextIndex: Int?
+    private var cachedEditingAnnotation: Annotation?
+
     private var toolbar: ScreenshotToolbarView?
     private var textField: NSTextField?
     private var textEditor: NSView?
@@ -168,6 +176,27 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
             }
         }
 
+        // 关键改动：若有选中的文字，注册其删除按钮与移动光标；并为所有文字标注提供拖拽移动小手
+        if let idx = selectedTextIndex, idx < annotations.count,
+           let tRect = annotations[idx].textBoundingBox(), !tRect.isEmpty {
+            let delRect = textDeleteButtonRect(for: tRect).intersection(bounds)
+            if !delRect.isEmpty {
+                addCursorRect(delRect, cursor: .pointingHand)
+            }
+            let inner = tRect.intersection(bounds)
+            if !inner.isEmpty {
+                addCursorRect(inner, cursor: isDraggingText ? .closedHand : .openHand)
+            }
+        }
+        for (idx, ann) in annotations.enumerated() where idx != selectedTextIndex {
+            if let tRect = ann.textBoundingBox(), !tRect.isEmpty {
+                let inner = tRect.intersection(bounds)
+                if !inner.isEmpty {
+                    addCursorRect(inner, cursor: .openHand)
+                }
+            }
+        }
+
         // 优先注册 8 个边角拖拽控点的光标响应区
         let hitRadius: CGFloat = 9.0
         for handle in SelectionHandle.allCases {
@@ -238,6 +267,12 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         if let idx = selectedMosaicIndex, idx < annotations.count,
            case let .mosaic(mRect, _) = annotations[idx], !mRect.isEmpty {
             drawSelectedMosaicControls(mRect)
+        }
+
+        // 关键改动：绘制当前选中的文字标注高亮边框与右上角删除按钮
+        if let idx = selectedTextIndex, idx < annotations.count,
+           let tRect = annotations[idx].textBoundingBox(), !tRect.isEmpty {
+            drawSelectedTextControls(tRect)
         }
 
         // 选区外边框应用主题青绿配置色 (#43E9C9)
@@ -357,6 +392,65 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         ctx.restoreGState()
     }
 
+    // MARK: - 选中文字交互控点与手柄绘制
+
+    private func textDeleteButtonRect(for textRect: NSRect) -> NSRect {
+        let btnSize: CGFloat = 16.0
+        return NSRect(x: textRect.maxX - btnSize / 2, y: textRect.maxY - btnSize / 2, width: btnSize, height: btnSize)
+    }
+
+    private func deleteSelectedText() {
+        guard let index = selectedTextIndex, index < annotations.count else { return }
+        annotations.remove(at: index)
+        selectedTextIndex = nil
+        isDraggingText = false
+        window?.invalidateCursorRects(for: self)
+        overlayCanvas.needsDisplay = true
+    }
+
+    private func drawSelectedTextControls(_ rect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        ctx.saveGState()
+
+        // 1. 绘制高亮微透边框（圆角 4pt，1.5pt 系统蓝高亮）
+        let box = rect.insetBy(dx: 0.5, dy: 0.5)
+        let strokeColor = NSColor.systemBlue.withAlphaComponent(0.85)
+        ctx.setStrokeColor(strokeColor.cgColor)
+        ctx.setLineWidth(1.2)
+        let outlinePath = CGPath(roundedRect: box, cornerWidth: 4, cornerHeight: 4, transform: nil)
+        ctx.addPath(outlinePath)
+        let dashes: [CGFloat] = [4, 3]
+        ctx.setLineDash(phase: 0, lengths: dashes)
+        ctx.strokePath()
+
+        // 2. 右上角微型删除按钮 (16x16，深红圆底 + 纯白清晰 xmark)
+        let delRect = textDeleteButtonRect(for: rect)
+        ctx.saveGState()
+        ctx.setShadow(offset: CGSize(width: 0, height: -1), blur: 3,
+                      color: NSColor.black.withAlphaComponent(0.55).cgColor)
+        ctx.setFillColor(NSColor(red: 235 / 255.0, green: 55 / 255.0, blue: 55 / 255.0, alpha: 0.95).cgColor)
+        ctx.fillEllipse(in: delRect)
+        ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.5).cgColor)
+        ctx.setLineWidth(1.0)
+        ctx.strokeEllipse(in: delRect)
+        ctx.restoreGState()
+
+        // 绘制白色 xmark
+        ctx.saveGState()
+        ctx.setStrokeColor(NSColor.white.cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.setLineCap(.round)
+        let margin: CGFloat = 4.5
+        ctx.move(to: CGPoint(x: delRect.minX + margin, y: delRect.minY + margin))
+        ctx.addLine(to: CGPoint(x: delRect.maxX - margin, y: delRect.maxY - margin))
+        ctx.move(to: CGPoint(x: delRect.minX + margin, y: delRect.maxY - margin))
+        ctx.addLine(to: CGPoint(x: delRect.maxX - margin, y: delRect.minY + margin))
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        ctx.restoreGState()
+    }
+
     // 关键改动：注册全视口追踪区，持续派发高频 mouseMoved 事件
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -401,7 +495,56 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
             }
         }
 
-        // 双击选区内部直接复制并退出
+        // 0. 若当前存在选中的文字，优先检测其删除按钮
+        if let idx = selectedTextIndex, idx < annotations.count,
+           let tRect = annotations[idx].textBoundingBox() {
+            let delRect = textDeleteButtonRect(for: tRect)
+            if delRect.contains(point) {
+                deleteSelectedText()
+                return
+            }
+        }
+
+        // 0.1 检查是否点击或双击了任意已存在的文字标注
+        var hitTextIdx: Int?
+        for (idx, ann) in annotations.enumerated().reversed() {
+            if let tRect = ann.textBoundingBox(), tRect.contains(point) {
+                hitTextIdx = idx
+                break
+            }
+        }
+        if let idx = hitTextIdx {
+            selectedMosaicIndex = nil
+            if event.clickCount >= 2 {
+                // 关键改动 3：双击文字标注直接进入二次编辑模式
+                editText(at: idx)
+                return
+            }
+            // 关键改动 4：单击选中文字，准备平移拖动位置
+            selectedTextIndex = idx
+            isDraggingText = true
+            textDragStartMouse = point
+            textDragInitialOrigin = annotations[idx].textOrigin ?? point
+            if let col = annotations[idx].textColor {
+                applyColor(col)
+            }
+            if let sz = annotations[idx].textSize {
+                currentFontSize = sz
+                toolbar?.setWidth(sz)
+            }
+            window?.invalidateCursorRects(for: self)
+            overlayCanvas.needsDisplay = true
+            return
+        }
+
+        // 点击空白处，取消选中当前文字
+        if selectedTextIndex != nil {
+            selectedTextIndex = nil
+            window?.invalidateCursorRects(for: self)
+            overlayCanvas.needsDisplay = true
+        }
+
+        // 双击选区内部空白处直接复制并退出
         if !selection.isEmpty, event.clickCount == 2, selection.contains(point) {
             copySelection()
             return
@@ -490,6 +633,21 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
     override func mouseDragged(with event: NSEvent) {
         let point = clamped(convert(event.locationInWindow, from: nil))
 
+        // 0. 正在平移拖动文字标注（需求 4）
+        if isDraggingText, let idx = selectedTextIndex, idx < annotations.count,
+           case let .text(_, value, color, size) = annotations[idx] {
+            let dx = point.x - textDragStartMouse.x
+            let dy = point.y - textDragStartMouse.y
+            let proposedOrigin = NSPoint(x: textDragInitialOrigin.x + dx, y: textDragInitialOrigin.y + dy)
+            let font = NSFont.systemFont(ofSize: size, weight: .semibold)
+            let s = (value as NSString).size(withAttributes: [.font: font])
+            let clampedX = min(max(proposedOrigin.x, selection.minX), max(selection.minX, selection.maxX - s.width))
+            let clampedY = min(max(proposedOrigin.y, selection.minY), max(selection.minY, selection.maxY - s.height))
+            annotations[idx] = .text(origin: NSPoint(x: clampedX, y: clampedY), value: value, color: color, size: size)
+            overlayCanvas.needsDisplay = true
+            return
+        }
+
         // 1. 正在拖拽马赛克 4 角缩放
         if activeMosaicCorner != nil, let anchor = mosaicDragAnchor,
            let idx = selectedMosaicIndex, idx < annotations.count,
@@ -550,6 +708,14 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
     }
 
     override func mouseUp(with event: NSEvent) {
+        // 完成文字标注平移拖拽
+        if isDraggingText {
+            isDraggingText = false
+            window?.invalidateCursorRects(for: self)
+            overlayCanvas.needsDisplay = true
+            return
+        }
+
         // 完成马赛克 4 角缩放或拖拽
         if activeMosaicCorner != nil || isDraggingMosaic {
             activeMosaicCorner = nil
@@ -618,7 +784,11 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
             }
         }
 
-        // 支持 Delete (keyCode 51) 或 ForwardDelete (keyCode 117) 移除选中的马赛克
+        // 支持 Delete (keyCode 51) 或 ForwardDelete (keyCode 117) 移除选中的马赛克或文字标注
+        if (event.keyCode == 51 || event.keyCode == 117) && selectedTextIndex != nil && textField == nil {
+            deleteSelectedText()
+            return
+        }
         if (event.keyCode == 51 || event.keyCode == 117) && selectedMosaicIndex != nil && textField == nil {
             deleteSelectedMosaic()
             return
@@ -631,6 +801,12 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
             }
             if colorPickerView != nil {
                 dismissColorPicker()
+                return
+            }
+            if selectedTextIndex != nil {
+                selectedTextIndex = nil
+                overlayCanvas.needsDisplay = true
+                window?.invalidateCursorRects(for: self)
                 return
             }
             if selectedMosaicIndex != nil {
@@ -650,7 +826,13 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
             return
         }
         if event.keyCode == 36 || event.keyCode == 76 {
-            if textField != nil { commitPendingText() } else if !selection.isEmpty { copySelection() }
+            if textField != nil {
+                commitPendingText()
+            } else if let idx = selectedTextIndex {
+                editText(at: idx)
+            } else if !selection.isEmpty {
+                copySelection()
+            }
             return
         }
         if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "z" {
@@ -668,6 +850,7 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         dismissSizeSlider()
         annotations.removeAll()
         selectedMosaicIndex = nil
+        selectedTextIndex = nil
         selection = .zero
         selectionStart = clamped(point)
         overlayCanvas.needsDisplay = true
@@ -692,41 +875,54 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         }
     }
 
-    // 关键改动 3：文字输入框底色彻底透明，去掉遮挡黑底与投影，以极简半透微边框辅助定位
-    private func beginText(at point: NSPoint) {
+    // 关键改动 2 & 3：高对比度、清晰可视的文字输入框（深色半透底座 + 蓝色聚焦边框 + 景深阴影）
+    private func beginText(at point: NSPoint, initialText: String? = nil, restoredOrigin: NSPoint? = nil) {
         commitPendingText()
 
-        let textX = min(point.x, max(selection.minX, selection.maxX - min(140, selection.width)))
-        let editorWidth = min(360, max(140, selection.maxX - textX))
-        let editorHeight: CGFloat = max(42.0, currentFontSize + 20.0)
-        let editorX = min(bounds.maxX - editorWidth - 4, max(bounds.minX + 4, textX))
-        let editorY = min(bounds.maxY - editorHeight - 4, max(bounds.minY + 4, point.y - 10))
-        pendingTextOrigin = NSPoint(x: editorX + 10, y: editorY + 10)
+        let editorWidth: CGFloat = 280
+        let editorHeight: CGFloat = max(44.0, currentFontSize + 22.0)
+        let clickOriginX = restoredOrigin?.x ?? point.x
+        let clickOriginY = restoredOrigin?.y ?? point.y
+
+        // 计算输入框在视口中的安全位置，贴合用户点击位置且不溢出边界
+        let editorX = min(bounds.maxX - editorWidth - 10, max(bounds.minX + 10, clickOriginX - 8))
+        let editorY = min(bounds.maxY - editorHeight - 10, max(bounds.minY + 10, clickOriginY - 8))
+
+        // 文字真实绘制的 origin
+        pendingTextOrigin = restoredOrigin ?? NSPoint(x: editorX + 10, y: editorY + 10)
 
         let editor = NSView(frame: NSRect(x: editorX, y: editorY, width: editorWidth, height: editorHeight))
         editor.wantsLayer = true
-        editor.layer?.cornerRadius = 6
-        // 关键改动 3：底色透明，绝不遮挡底部图片
-        editor.layer?.backgroundColor = NSColor.clear.cgColor
-        editor.layer?.borderWidth = 1.0
-        // 极简微弱边框提示输入区域
-        editor.layer?.borderColor = ScreenshotDesignTokens.iconPrimary.withAlphaComponent(0.65).cgColor
-        editor.layer?.shadowOpacity = 0
+        editor.layer?.cornerRadius = 8
+        // 关键改动 2：采用高对比度深色微透底座，无论底图为何均清晰醒目
+        editor.layer?.backgroundColor = NSColor(white: 0.12, alpha: 0.92).cgColor
+        editor.layer?.borderWidth = 1.5
+        // 关键改动 2：鲜明的系统蓝高亮聚焦边框
+        editor.layer?.borderColor = NSColor.systemBlue.cgColor
+        // 景深柔光阴影，将输入框立体浮现于底图上方
+        editor.layer?.shadowColor = NSColor.black.cgColor
+        editor.layer?.shadowOpacity = 0.4
+        editor.layer?.shadowRadius = 8
+        editor.layer?.shadowOffset = CGSize(width: 0, height: -2)
 
-        let field = NSTextField(frame: editor.bounds.insetBy(dx: 8, dy: 5))
+        let field = NSTextField(frame: editor.bounds.insetBy(dx: 10, dy: 7))
         field.autoresizingMask = [.width, .height]
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
         field.textColor = currentColor
-        field.font = .systemFont(ofSize: currentFontSize, weight: .medium)
+        field.font = .systemFont(ofSize: max(13, currentFontSize), weight: .semibold)
         field.placeholderAttributedString = NSAttributedString(
-            string: "键入标注文本...",
+            string: "键入文字，回车确认，Esc取消…",
             attributes: [
-                .foregroundColor: NSColor(white: 0.75, alpha: 0.9),
-                .font: NSFont.systemFont(ofSize: max(12, currentFontSize - 2), weight: .regular)
+                .foregroundColor: NSColor(white: 0.85, alpha: 0.7),
+                .font: NSFont.systemFont(ofSize: 12, weight: .regular)
             ]
         )
+        if let initialText, !initialText.isEmpty {
+            field.stringValue = initialText
+            field.selectText(nil)
+        }
         field.delegate = self
         editor.addSubview(field)
         addSubview(editor)
@@ -736,18 +932,54 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         window?.makeFirstResponder(field)
     }
 
+    // 关键改动 3：文字二次编辑
+    private func editText(at index: Int) {
+        guard index < annotations.count,
+              case let .text(origin, value, color, size) = annotations[index] else { return }
+        commitPendingText()
+        editingTextIndex = index
+        cachedEditingAnnotation = annotations[index]
+        currentColor = color
+        currentFontSize = size
+        toolbar?.setColor(color)
+        toolbar?.setWidth(size)
+        // 临时移出原文字，开始编辑
+        annotations.remove(at: index)
+        selectedTextIndex = nil
+        overlayCanvas.needsDisplay = true
+        beginText(at: origin, initialText: value, restoredOrigin: origin)
+    }
+
     private func commitPendingText() {
         guard let field = textField, let origin = pendingTextOrigin else { return }
         let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if !value.isEmpty {
-            annotations.append(.text(origin: origin, value: value, color: currentColor, size: currentFontSize))
+            if let editIdx = editingTextIndex, editIdx <= annotations.count {
+                annotations.insert(.text(origin: origin, value: value, color: currentColor, size: currentFontSize), at: editIdx)
+                selectedTextIndex = editIdx
+            } else {
+                annotations.append(.text(origin: origin, value: value, color: currentColor, size: currentFontSize))
+                selectedTextIndex = annotations.count - 1
+            }
         }
+        cachedEditingAnnotation = nil
+        editingTextIndex = nil
         cleanupTextEditor()
         overlayCanvas.needsDisplay = true
     }
 
     private func cancelPendingText() {
+        if let cached = cachedEditingAnnotation, let editIdx = editingTextIndex {
+            if editIdx <= annotations.count {
+                annotations.insert(cached, at: editIdx)
+            } else {
+                annotations.append(cached)
+            }
+        }
+        cachedEditingAnnotation = nil
+        editingTextIndex = nil
         cleanupTextEditor()
+        overlayCanvas.needsDisplay = true
     }
 
     private func cleanupTextEditor() {
@@ -761,6 +993,17 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
 
     func controlTextDidEndEditing(_ obj: Notification) {
         commitPendingText()
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            commitPendingText()
+            return true
+        } else if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            cancelPendingText()
+            return true
+        }
+        return false
     }
 
     // 关键改动：底部工具栏严格居中对齐当前截图选区（midX），并实现全边界安全防遮挡算法
@@ -1030,6 +1273,7 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         if !annotations.isEmpty {
             annotations.removeLast()
             selectedMosaicIndex = nil
+            selectedTextIndex = nil
             overlayCanvas.needsDisplay = true
             window?.invalidateCursorRects(for: self)
         }
@@ -1054,6 +1298,10 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         }
         if let field = textField {
             field.textColor = color
+        }
+        if let idx = selectedTextIndex, idx < annotations.count,
+           case let .text(origin, val, _, size) = annotations[idx] {
+            annotations[idx] = .text(origin: origin, value: val, color: color, size: size)
         }
         overlayCanvas.needsDisplay = true
     }
@@ -1194,6 +1442,10 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
             if let field = textField {
                 field.font = .systemFont(ofSize: currentFontSize, weight: .medium)
             }
+            if let idx = selectedTextIndex, idx < annotations.count,
+               case let .text(origin, val, col, _) = annotations[idx] {
+                annotations[idx] = .text(origin: origin, value: val, color: col, size: currentFontSize)
+            }
         case .mosaic:
             currentMosaicScale = max(4, size)
             // 模糊度更新时使缓存刷新
@@ -1229,6 +1481,11 @@ final class ScreenshotCanvasView: NSView, ScreenshotToolbarDelegate, ScreenshotC
         case .text:
             currentFontSize = currentFontSize >= 32 ? 12 : currentFontSize + 4
             toolbar.setWidth(currentFontSize)
+            if let idx = selectedTextIndex, idx < annotations.count,
+               case let .text(origin, val, col, _) = annotations[idx] {
+                annotations[idx] = .text(origin: origin, value: val, color: col, size: currentFontSize)
+                overlayCanvas.needsDisplay = true
+            }
         case .mosaic:
             currentMosaicScale = currentMosaicScale >= 32 ? 8 : currentMosaicScale + 6
             warmupMosaicCache(scale: currentMosaicScale)
